@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- CSP is injected by the provider; it allows only our nonce'd script and
+         webview-local styles/fonts. No remote origins (the dev sandbox is
+         firewalled, and it is good hygiene regardless). -->
+    <meta http-equiv="Content-Security-Policy" content="{{csp}}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="{{styleUri}}" rel="stylesheet" />
+    <title>Antigravity Chat</title>
+  </head>
+  <body>
+    <!-- App shell. The header reflects readiness; the transcript holds the
+         conversation; the composer is a Material 3 text field + send FAB. -->
+    <header class="app-bar">
+      <div class="app-bar__title">
+        <span class="app-bar__mark" aria-hidden="true"></span>
+        <span>Antigravity</span>
+      </div>
+      <div class="app-bar__meta" id="meta"></div>
+    </header>
+
+    <main id="transcript" class="transcript" aria-live="polite">
+      <!-- Onboarding / welcome content is injected here when not ready. -->
+    </main>
+
+    <footer class="composer">
+      <div class="composer__chips">
+        <button id="goalChip" class="chip" type="button" aria-pressed="false" title="Run the task to completion without pausing for approval">
+          <span class="chip__dot"></span> Goal mode
+        </button>
+        <button id="settingsChip" class="chip chip--ghost" type="button" title="Open Antigravity settings">Settings</button>
+      </div>
+      <div class="field">
+        <textarea
+          id="input"
+          class="field__input"
+          rows="1"
+          placeholder="Ask Antigravity to build, fix, or explain…"
+          aria-label="Message Antigravity"
+        ></textarea>
+        <button id="send" class="fab" type="button" title="Send (Enter)" aria-label="Send">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12 2-12 2z" />
+          </svg>
+        </button>
+        <button id="stop" class="fab fab--stop" type="button" title="Stop" aria-label="Stop" hidden>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+          </svg>
+        </button>
+      </div>
+      <p class="composer__hint">Enter to send · Shift+Enter for a new line</p>
+    </footer>
+
+    <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+  </body>
+</html>

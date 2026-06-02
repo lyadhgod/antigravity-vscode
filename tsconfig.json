@@ -1,0 +1,25 @@
+{
+  // Base TypeScript config for the extension source. esbuild does the actual
+  // bundling/transpilation; tsc is used only for strict type-checking
+  // (`npm run check-types`). Keeping `noEmit` here avoids tsc and esbuild
+  // fighting over the output directory.
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "sourceMap": true,
+    "rootDir": "src",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "out", "test"]
+}

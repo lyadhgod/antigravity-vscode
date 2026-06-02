@@ -1,0 +1,19 @@
+# Files excluded from the packaged .vsix. The published extension ships only
+# the bundled dist/, the webview media, the icon, and the docs — never the
+# TypeScript sources, tests, or build tooling.
+.vscode/**
+.github/**
+.devcontainer/**
+src/**
+test/**
+out/**
+node_modules/**
+docs/**
+**/*.ts
+**/*.map
+esbuild.js
+tsconfig*.json
+.mocharc.json
+.gitignore
+.editorconfig
+**/.DS_Store

@@ -1,0 +1,21 @@
+{
+  // Separate config used only by `npm run pretest`. It compiles the
+  // vscode-free core modules together with the unit tests to plain CommonJS
+  // in `out/`, so Mocha can run them on bare Node without downloading VS Code
+  // or stubbing the `vscode` module. Anything that imports `vscode` is
+  // deliberately excluded from this graph.
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "outDir": "out",
+    "rootDir": ".",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "sourceMap": true,
+    "types": ["node", "mocha"]
+  },
+  "include": ["src/core/**/*.ts", "test/unit/**/*.ts"]
+}

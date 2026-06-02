@@ -78,6 +78,9 @@ for domain in \
     "vscode.blob.core.windows.net" \
     "update.code.visualstudio.com" \
     "antigravity.google" \
+    "oauth2.googleapis.com" \
+    "daily-cloudcode-pa.googleapis.com" \
+    "lh3.googleusercontent.com" \
     "code.claude.com" \
     "claude.com" \
     "m3.material.io"; do

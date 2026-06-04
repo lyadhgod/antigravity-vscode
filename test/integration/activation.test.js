@@ -4,8 +4,8 @@
  *
  * Loads the *real bundled* extension (dist/extension.js) with a minimal mock of
  * the `vscode` API injected into the module loader, then calls `activate` and
- * asserts the extension registers its chat webview, status bar, and the full
- * command set without throwing. This exercises the actual wiring path
+ * asserts the extension registers its chat webview and the full command set
+ * without throwing. This exercises the actual wiring path
  * (extension.ts → commands → services → core) that the unit tests don't cover,
  * yet needs no real editor, network, or `agy` binary.
  *
@@ -30,6 +30,7 @@ const vscodeMock = {
   ConfigurationTarget: { Global: 1, Workspace: 2 },
   ThemeColor: class { constructor(id) { this.id = id; } },
   ThemeIcon: class { constructor(id) { this.id = id; } },
+  EventEmitter: class { constructor() { this.event = () => disposable(); } fire() {} dispose() {} },
   Uri: {
     joinPath: (base, ...parts) => {
       const fsPath = [base.fsPath || base, ...parts].join("/");
@@ -37,18 +38,19 @@ const vscodeMock = {
     }
   },
   window: {
-    createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
     registerWebviewViewProvider: (id) => {
       registered.webviews.push(id);
       return disposable();
     },
     createTerminal: () => ({ show() {}, sendText() {}, dispose() {} }),
+    onDidCloseTerminal: () => disposable(),
     terminals: [],
     activeTextEditor: undefined,
     showInformationMessage: () => Promise.resolve(undefined),
     showWarningMessage: () => Promise.resolve(undefined),
     showInputBox: () => Promise.resolve(undefined),
-    showOpenDialog: () => Promise.resolve(undefined)
+    showOpenDialog: () => Promise.resolve(undefined),
+    showQuickPick: () => Promise.resolve(undefined)
   },
   commands: {
     registerCommand: (id, fn) => {
@@ -91,7 +93,12 @@ describe("extension activation (against the bundled dist with a mocked vscode)",
   });
 
   it("activates and registers the chat webview + every command", () => {
-    const context = { subscriptions: [], extensionUri: { fsPath: process.cwd() } };
+    const context = {
+      subscriptions: [],
+      extensionUri: { fsPath: process.cwd() },
+      // The chat provider persists sessions in workspaceState.
+      workspaceState: { get: (_k, def) => def, update: () => Promise.resolve() }
+    };
     ext.activate(context);
 
     assert.ok(registered.webviews.includes("antigravity.chatView"), "chat webview not registered");
@@ -99,13 +106,15 @@ describe("extension activation (against the bundled dist with a mocked vscode)",
     const ids = registered.commands.map((c) => c.id);
     for (const expected of [
       "antigravity.openChat",
+      "antigravity.newChat",
       "antigravity.ask",
       "antigravity.askWithSelection",
-      "antigravity.runGoal",
+      "antigravity.insertSlashCommand",
       "antigravity.startSession",
       "antigravity.login",
-      "antigravity.installCli",
-      "antigravity.selectModel",
+      "antigravity.logout",
+      "antigravity.showChangelog",
+      "antigravity.managePlugins",
       "antigravity.stop"
     ]) {
       assert.ok(ids.includes(expected), `missing command: ${expected}`);

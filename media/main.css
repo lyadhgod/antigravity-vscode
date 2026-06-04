@@ -1,26 +1,22 @@
 /* =============================================================================
-   Antigravity Chat — Material 3 Expressive stylesheet
+   Antigravity — Material 3 Expressive stylesheet
    -----------------------------------------------------------------------------
-   This file implements the M3 *Expressive* language (https://m3.material.io)
-   inside a VS Code webview. Expressive M3 leans on: vivid tonal color, larger
-   and more varied corner shapes, an emphatic type scale, springy "emphasized"
-   motion, and tactile state layers on every interactive surface.
+   M3 *Expressive* in a VS Code webview: vivid tonal color, large/varied shapes,
+   an emphatic type scale, springy "emphasized" motion, tactile state layers.
+   Neutral surfaces derive from the live VS Code theme via color-mix() so the
+   panel matches the editor in light/dark.
 
-   Theme adaptation: rather than hard-coding light/dark palettes, we derive
-   neutral surfaces from VS Code's own theme variables (so the panel always
-   matches the user's editor) and overlay a fixed expressive accent ramp. The
-   `color-mix()` calls blend the brand hue toward the live surface/foreground so
-   containers read correctly in both light and dark themes.
+   Layout is a two-step panel switched by `body[data-view]`:
+     gate  → sign-in / install        list → sessions        chat → transcript
    ========================================================================== */
 
 :root {
-  /* --- Expressive accent ramp (brand hues, theme-independent seeds) -------- */
-  --ag-primary: #7c6bf0;          /* vivid indigo — primary actions */
+  --ag-primary: #7c6bf0;
   --ag-on-primary: #ffffff;
-  --ag-tertiary: #f76e8e;         /* expressive pink — goal/active accents */
-  --ag-secondary: #34d0c0;        /* teal — informational chips */
+  --ag-tertiary: #f76e8e;
+  --ag-secondary: #34d0c0;
+  --ag-warn: #f59e42;
 
-  /* --- Neutral surfaces, derived from the live VS Code theme --------------- */
   --ag-surface: var(--vscode-editor-background, #1e1e1e);
   --ag-on-surface: var(--vscode-editor-foreground, #e6e6e6);
   --ag-on-surface-variant: color-mix(in srgb, var(--ag-on-surface) 64%, var(--ag-surface));
@@ -30,357 +26,421 @@
   --ag-outline: color-mix(in srgb, var(--ag-on-surface) 28%, transparent);
   --ag-outline-variant: color-mix(in srgb, var(--ag-on-surface) 14%, transparent);
 
-  /* --- Derived tonal containers -------------------------------------------- */
   --ag-primary-container: color-mix(in srgb, var(--ag-primary) 26%, var(--ag-surface));
   --ag-on-primary-container: color-mix(in srgb, var(--ag-primary) 72%, var(--ag-on-surface));
   --ag-error: var(--vscode-errorForeground, #f48771);
   --ag-error-container: color-mix(in srgb, var(--ag-error) 22%, var(--ag-surface));
 
-  /* --- Expressive shape scale (notably rounder than baseline M3) ----------- */
-  --ag-shape-xs: 10px;
-  --ag-shape-sm: 14px;
-  --ag-shape-md: 18px;
-  --ag-shape-lg: 24px;
-  --ag-shape-xl: 30px;
-  --ag-shape-full: 999px;
+  --ag-shape-xs: 10px; --ag-shape-sm: 14px; --ag-shape-md: 18px;
+  --ag-shape-lg: 24px; --ag-shape-xl: 30px; --ag-shape-full: 999px;
 
-  /* --- Emphasized motion (springy, M3 Expressive signature) ---------------- */
   --ag-ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
-  --ag-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* slight overshoot */
-  --ag-dur-short: 140ms;
-  --ag-dur-medium: 260ms;
-  --ag-dur-long: 420ms;
+  --ag-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ag-dur-short: 140ms; --ag-dur-medium: 260ms; --ag-dur-long: 420ms;
 
-  /* --- Type scale ---------------------------------------------------------- */
   --ag-font: var(--vscode-font-family, "Segoe UI", system-ui, sans-serif);
   --ag-mono: var(--vscode-editor-font-family, ui-monospace, "Cascadia Code", monospace);
 }
 
 * { box-sizing: border-box; }
-
-html, body {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-}
-
+html, body { height: 100%; margin: 0; padding: 0; }
 body {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  font-family: var(--ag-font);
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--ag-on-surface);
-  background: var(--ag-surface);
-  overflow: hidden;
+  display: flex; flex-direction: column; height: 100vh;
+  font-family: var(--ag-font); font-size: 13px; line-height: 1.5;
+  color: var(--ag-on-surface); background: var(--ag-surface); overflow: hidden;
 }
+[hidden] { display: none !important; }
+
+/* --- View switching -------------------------------------------------------- */
+#notfound, #gate, #list, #chatarea, #composer { display: none; }
+body[data-view="notfound"] #notfound { display: flex; }
+body[data-view="gate"] #gate { display: flex; }
+body[data-view="list"] #list { display: flex; }
+body[data-view="chat"] #chatarea { display: flex; }
+body[data-view="chat"] #composer { display: block; }
 
 /* --- Top app bar ----------------------------------------------------------- */
+/* Fixed min-height so the bar is the SAME height on every step (#round5-2):
+   the chat step's back button (a 40px icon-btn) sets the tallest layout, so we
+   pin all steps to that height instead of letting the bar shrink on the list. */
 .app-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--ag-surface-container);
-  border-bottom: 1px solid var(--ag-outline-variant);
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  min-height: 60px; padding: 10px 14px;
+  background: var(--ag-surface-container); border-bottom: 1px solid var(--ag-outline-variant);
+}
+.app-bar__title { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 600; letter-spacing: 0.2px; }
+.app-bar__logo { width: 22px; height: 22px; object-fit: contain; display: block; }
+/* Only the chat step shows the back button. Instead of an abrupt display flip,
+   it springs open from its centre — collapsed to zero width + scaled to 0 on
+   the gate/list steps, expanding to take its space on chat (#round6-2). The
+   negative margin cancels the title's flex `gap` while collapsed so there's no
+   phantom space. These selectors out-specify `.icon-btn` (declared later). */
+.app-bar .app-bar__back {
+  display: grid; width: 0; min-width: 0; padding: 0; margin-right: -9px;
+  transform: scale(0); opacity: 0; overflow: hidden;
+  transition: width var(--ag-dur-medium) var(--ag-ease-spring),
+              margin-right var(--ag-dur-medium) var(--ag-ease-spring),
+              transform var(--ag-dur-medium) var(--ag-ease-spring),
+              opacity var(--ag-dur-short) var(--ag-ease-emphasized);
+}
+body[data-view="chat"] .app-bar .app-bar__back {
+  width: 40px; min-width: 40px; margin-right: 0; transform: scale(1); opacity: 1;
 }
 
-.app-bar__title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
+/* --- Sign-in / install gate (#7) ------------------------------------------ */
+.gate { flex: 1 1 auto; align-items: center; justify-content: center; padding: 24px; }
+.gate__card {
+  max-width: 320px; text-align: center; padding: 32px 24px;
+  background: var(--ag-surface-container); border: 1px solid var(--ag-outline-variant);
+  border-radius: var(--ag-shape-xl); animation: rise var(--ag-dur-long) var(--ag-ease-spring) both;
 }
+.gate__logo { width: 72px; height: 72px; object-fit: contain; margin: 0 auto 16px; display: block; }
+.gate__card h2 { margin: 0 0 8px; font-size: 21px; }
+.gate__card p { margin: 0 0 16px; color: var(--ag-on-surface-variant); }
+.gate__install-hint { margin-bottom: 4px !important; }
+.gate__link { color: var(--ag-primary); text-decoration: none; font-weight: 600; }
+.gate__link:hover { text-decoration: underline; }
 
-/* The "mark" is a gradient orb evoking the orbiting product icon. */
-.app-bar__mark {
-  width: 22px;
-  height: 22px;
-  border-radius: var(--ag-shape-full);
-  background: conic-gradient(from 210deg, var(--ag-primary), var(--ag-tertiary), var(--ag-secondary), var(--ag-primary));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ag-primary) 20%, transparent);
-  animation: spin 9s linear infinite;
-}
+/* --- Sessions list (step 1, #5) ------------------------------------------- */
+.list { flex: 1 1 auto; flex-direction: column; overflow-y: auto; padding: 14px; gap: 10px; }
+/* New Session row: an options dropdown to the left of the New Session button. */
+.list__actions { display: flex; align-items: center; gap: 8px; }
+.list__new { flex: 1 1 auto; }
+.sessions { display: flex; flex-direction: column; gap: 8px; }
 
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.app-bar__meta {
-  font-size: 11px;
-  color: var(--ag-on-surface-variant);
+/* New-session options dropdown (#round5-5). */
+.newopts { position: relative; flex: 0 0 auto; }
+.newopts__btn { background: var(--ag-surface-container-high); border: 1px solid var(--ag-outline-variant); }
+.newopts__btn.active { color: var(--ag-primary); border-color: var(--ag-primary); background: color-mix(in srgb, var(--ag-primary) 14%, var(--ag-surface)); }
+.newopts__menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 210px;
+  background: var(--ag-surface-container-highest); border: 1px solid var(--ag-outline-variant);
+  border-radius: var(--ag-shape-md); box-shadow: 0 8px 28px color-mix(in srgb, black 30%, transparent);
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  animation: rise var(--ag-dur-short) var(--ag-ease-emphasized) both;
 }
-
-/* --- Transcript ------------------------------------------------------------ */
-.transcript {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 16px 14px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  scroll-behavior: smooth;
+.newopts__item { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: var(--ag-shape-sm); cursor: pointer; font-weight: 500; }
+.newopts__item:hover { background: color-mix(in srgb, var(--ag-primary) 14%, transparent); }
+/* Custom rounded checkbox — bigger so the tick sits comfortably inside (#round6-1). */
+.newopts__item input {
+  appearance: none; -webkit-appearance: none; margin: 0; cursor: pointer; flex: 0 0 auto;
+  width: 22px; height: 22px; border-radius: 8px;
+  border: 2px solid var(--ag-outline); background: transparent;
+  display: grid; place-items: center;
+  transition: background var(--ag-dur-short) var(--ag-ease-emphasized), border-color var(--ag-dur-short) var(--ag-ease-emphasized);
 }
-
-/* Message rows enter with an emphasized spring rise. */
-.msg {
-  max-width: 92%;
-  padding: 12px 14px;
-  border-radius: var(--ag-shape-lg);
-  animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both;
-  word-wrap: break-word;
-  overflow-wrap: anywhere;
-}
-
-@keyframes rise {
-  from { opacity: 0; transform: translateY(10px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-/* User turns: filled primary container, right-aligned, asymmetric corner. */
-.msg--user {
-  align-self: flex-end;
-  background: var(--ag-primary-container);
-  color: var(--ag-on-primary-container);
-  border-bottom-right-radius: var(--ag-shape-xs);
-}
-
-/* Assistant turns: tonal surface card, left-aligned. */
-.msg--assistant {
-  align-self: flex-start;
-  background: var(--ag-surface-container-high);
-  border: 1px solid var(--ag-outline-variant);
-  border-bottom-left-radius: var(--ag-shape-xs);
-}
-
-/* Tool/action activity: a compact secondary chip. */
-.msg--tool {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 12px;
-  border-radius: var(--ag-shape-full);
-  background: color-mix(in srgb, var(--ag-secondary) 18%, var(--ag-surface));
-  color: color-mix(in srgb, var(--ag-secondary) 70%, var(--ag-on-surface));
-}
-
-.msg--tool::before {
-  content: "";
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--ag-secondary);
-}
-
-/* System/raw passthrough lines: muted monospace. */
-.msg--raw {
-  align-self: flex-start;
-  font-family: var(--ag-mono);
-  font-size: 11.5px;
-  color: var(--ag-on-surface-variant);
-  background: transparent;
-  padding: 2px 6px;
-  animation: none;
-}
-
-/* Errors: error container with a clear leading accent. */
-.msg--error {
-  align-self: stretch;
-  background: var(--ag-error-container);
-  border-left: 3px solid var(--ag-error);
-  color: color-mix(in srgb, var(--ag-error) 60%, var(--ag-on-surface));
-  border-radius: var(--ag-shape-sm);
-}
-
-/* Usage footer under a finished assistant turn. */
-.msg__usage {
-  margin-top: 8px;
-  font-size: 10.5px;
-  color: var(--ag-on-surface-variant);
-  letter-spacing: 0.3px;
-}
-
-/* Rich text inside messages. */
-.msg p { margin: 0 0 8px; }
-.msg p:last-child { margin-bottom: 0; }
-.msg h1, .msg h2, .msg h3 { margin: 6px 0; line-height: 1.25; }
-.msg ul, .msg ol { margin: 6px 0; padding-left: 20px; }
-.msg code {
-  font-family: var(--ag-mono);
-  font-size: 12px;
-  background: color-mix(in srgb, var(--ag-on-surface) 10%, transparent);
-  padding: 1px 5px;
-  border-radius: 6px;
-}
-.msg pre {
-  margin: 8px 0;
-  padding: 12px;
-  overflow-x: auto;
-  background: var(--ag-surface-container-highest);
-  border: 1px solid var(--ag-outline-variant);
-  border-radius: var(--ag-shape-sm);
-}
-.msg pre code { background: none; padding: 0; }
-.msg a { color: var(--ag-primary); }
-
-/* Typing indicator (three springy dots). */
-.typing { display: inline-flex; gap: 5px; padding: 4px 2px; }
-.typing span {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--ag-primary);
-  animation: bounce 1.1s var(--ag-ease-spring) infinite;
-}
-.typing span:nth-child(2) { animation-delay: 0.15s; }
-.typing span:nth-child(3) { animation-delay: 0.3s; }
-@keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.5; } 40% { transform: translateY(-6px); opacity: 1; } }
-
-/* --- Welcome / onboarding card -------------------------------------------- */
-.welcome {
-  margin: auto 0;
-  align-self: center;
-  max-width: 320px;
-  text-align: center;
-  padding: 28px 22px;
-  background: var(--ag-surface-container);
-  border: 1px solid var(--ag-outline-variant);
-  border-radius: var(--ag-shape-xl);
-  animation: rise var(--ag-dur-long) var(--ag-ease-spring) both;
-}
-.welcome h2 { margin: 0 0 6px; font-size: 20px; }
-.welcome p { margin: 0 0 18px; color: var(--ag-on-surface-variant); }
-
-/* --- Buttons (filled M3 with state layer + press feedback) ----------------- */
-.btn {
-  position: relative;
-  font: inherit;
-  font-weight: 600;
-  border: none;
-  cursor: pointer;
-  padding: 11px 22px;
-  border-radius: var(--ag-shape-full);
-  background: var(--ag-primary);
-  color: var(--ag-on-primary);
-  transition: transform var(--ag-dur-short) var(--ag-ease-spring),
-              box-shadow var(--ag-dur-medium) var(--ag-ease-emphasized);
-  overflow: hidden;
-}
-.btn::after { /* state layer */
-  content: ""; position: absolute; inset: 0;
-  background: currentColor; opacity: 0;
+.newopts__item input:hover { border-color: var(--ag-primary); }
+.newopts__item input:checked { background: var(--ag-primary); border-color: var(--ag-primary); }
+.newopts__item input::after {
+  content: ""; width: 6px; height: 11px; box-sizing: border-box;
+  border: solid var(--ag-on-primary); border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg) translate(-1px, -1px); opacity: 0;
   transition: opacity var(--ag-dur-short) var(--ag-ease-emphasized);
 }
+.newopts__item input:checked::after { opacity: 1; }
+.sessions__empty { display: none; color: var(--ag-on-surface-variant); text-align: center; margin-top: 24px; }
+.list[data-empty="true"] .sessions__empty { display: block; }
+
+.session {
+  display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 14px;
+  border-radius: var(--ag-shape-md); background: var(--ag-surface-container-high);
+  border: 1px solid var(--ag-outline-variant); cursor: pointer;
+  transition: background var(--ag-dur-short) var(--ag-ease-emphasized), transform var(--ag-dur-short) var(--ag-ease-spring);
+  animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both;
+}
+.session:hover { background: var(--ag-surface-container-highest); }
+.session:active { transform: scale(0.99); }
+.session__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.session__title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session__time { font-size: 11px; color: var(--ag-on-surface-variant); }
+.session__delete {
+  flex: 0 0 auto; display: grid; place-items: center; width: 32px; height: 32px;
+  border: none; cursor: pointer; border-radius: var(--ag-shape-sm); background: transparent;
+  color: var(--ag-on-surface-variant); transition: background var(--ag-dur-short), color var(--ag-dur-short);
+}
+.session__delete:hover { background: color-mix(in srgb, var(--ag-error) 18%, transparent); color: var(--ag-error); }
+
+/* --- Transcript (step 2) --------------------------------------------------- */
+/* min-height:0 is essential: without it a flex item won't shrink below its
+   content height, so once messages overflow the transcript stops scrolling and
+   pushes the composer (and its buttons) off the bottom of the panel. */
+/* The chat area wraps the scrolling transcript so the pinned latest-input bar
+   (#2) can overlay its top edge, just below the app bar. */
+.chatarea { position: relative; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+.transcript { display: flex; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 14px 8px; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+
+/* Pinned latest input (#2): an overlay at the top of the transcript; content
+   scrolls underneath it. Clamped to a max height with a "Show more" toggle. */
+.pinned {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+  padding: 8px 14px 9px;
+  background: color-mix(in srgb, var(--ag-surface) 88%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--ag-outline-variant);
+  box-shadow: 0 2px 8px color-mix(in srgb, #000 14%, transparent);
+}
+.pinned__body {
+  font-size: 12.5px; line-height: 1.4; color: var(--ag-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+.pinned__body.is-clamp:not(.is-open) {
+  max-height: 96px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 64%, transparent);
+  mask-image: linear-gradient(180deg, #000 64%, transparent);
+}
+.pinned__body.is-open { max-height: 50vh; overflow-y: auto; }
+.pinned .showmore { margin-top: 4px; }
+
+/* "Show more" toggle for any input bubble (or the pin) taller than the clamp. */
+.showmore {
+  appearance: none; border: none; background: none; cursor: pointer; padding: 2px 0;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--ag-primary);
+}
+.showmore:hover { text-decoration: underline; }
+.showmore--user { align-self: flex-end; margin: -6px 2px 0; }
+.msg--clamp.is-open { max-height: none; }
+.msg--user.msg--clamp:not(.is-open) {
+  max-height: 180px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent);
+  mask-image: linear-gradient(180deg, #000 70%, transparent);
+}
+.msg { max-width: 92%; padding: 12px 14px; border-radius: var(--ag-shape-lg); animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both; word-wrap: break-word; overflow-wrap: anywhere; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.msg--user { align-self: flex-end; background: var(--ag-primary-container); color: var(--ag-on-primary-container); border-bottom-right-radius: var(--ag-shape-xs); }
+/* The model's output is rendered as full-width document content filling the
+   chat section — not a messenger bubble (#round6-4). User input stays a bubble. */
+.msg--assistant { align-self: stretch; max-width: 100%; background: transparent; border: none; border-radius: 0; padding: 4px 2px 10px; }
+.msg--system { align-self: stretch; font-size: 12px; background: color-mix(in srgb, var(--ag-secondary) 14%, var(--ag-surface)); border-left: 3px solid var(--ag-secondary); border-radius: var(--ag-shape-sm); color: color-mix(in srgb, var(--ag-secondary) 60%, var(--ag-on-surface)); }
+.msg--error { align-self: stretch; background: var(--ag-error-container); border-left: 3px solid var(--ag-error); border-radius: var(--ag-shape-sm); color: color-mix(in srgb, var(--ag-error) 60%, var(--ag-on-surface)); }
+.msg p { margin: 0 0 8px; } .msg p:last-child { margin-bottom: 0; }
+.msg h1, .msg h2, .msg h3 { margin: 6px 0; line-height: 1.25; }
+.msg ul, .msg ol { margin: 6px 0; padding-left: 20px; }
+.msg code { font-family: var(--ag-mono); font-size: 12px; background: color-mix(in srgb, var(--ag-on-surface) 10%, transparent); padding: 1px 5px; border-radius: 6px; }
+.msg pre { margin: 8px 0; padding: 12px; overflow-x: auto; background: var(--ag-surface-container-highest); border: 1px solid var(--ag-outline-variant); border-radius: var(--ag-shape-sm); }
+.msg pre code { background: none; padding: 0; }
+.msg a { color: var(--ag-primary); }
+/* A small trailing loader shown while the agent is still working after some text. */
+.msg__working { display: inline-flex; vertical-align: middle; margin-left: 4px; opacity: 0.85; }
+/* The agent's "▸ Thought for Xs…" reasoning summary — meta, not the answer. */
+.msg__meta { margin: 0 0 10px; font-size: 12px; line-height: 1.45; color: var(--ag-on-surface-variant); opacity: 0.7; }
+.msg__meta div { margin: 1px 0; }
+
+/* --- Intercepted option selector -----------------------------------------
+   When the live agy TUI blocks on a pick-one selector (model picker, sign-in
+   method, a clarifying/permission question) we render it here as clickable
+   choices instead of making the user arrow-key through the hidden terminal. */
+.prompt {
+  align-self: stretch; max-width: 100%;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px; border-radius: var(--ag-shape-lg);
+  background: var(--ag-surface-container); border: 1px solid var(--ag-outline-variant);
+  animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both;
+}
+.prompt__context {
+  font-size: 12.5px; line-height: 1.45; color: var(--ag-on-surface-variant);
+  padding: 8px 10px; border-radius: var(--ag-shape-sm);
+  background: var(--ag-surface-container-high, rgba(255,255,255,0.04));
+  border: 1px solid var(--ag-outline-variant);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.prompt__context code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt__title { font-weight: 600; font-size: 13px; color: var(--ag-on-surface-variant); }
+.prompt__options { display: flex; flex-direction: column; gap: 8px; }
+.prompt--horizontal .prompt__options { flex-direction: row; flex-wrap: wrap; }
+.prompt__option {
+  position: relative; overflow: hidden; text-align: left; cursor: pointer;
+  font: inherit; font-weight: 500; color: var(--ag-on-surface);
+  padding: 11px 16px; border-radius: var(--ag-shape-md);
+  background: var(--ag-surface-container-highest); border: 1.5px solid var(--ag-outline-variant);
+  transition: transform var(--ag-dur-short) var(--ag-ease-spring),
+              border-color var(--ag-dur-short) var(--ag-ease-emphasized),
+              background var(--ag-dur-short) var(--ag-ease-emphasized);
+}
+.prompt--horizontal .prompt__option { border-radius: var(--ag-shape-full); padding: 9px 18px; }
+.prompt__option::after {
+  content: ""; position: absolute; inset: 0; background: var(--ag-primary);
+  opacity: 0; transition: opacity var(--ag-dur-short) var(--ag-ease-emphasized);
+}
+.prompt__option:hover::after { opacity: 0.12; }
+.prompt__option:active { transform: scale(0.98); }
+/* The row the hidden TUI caret currently sits on (the default). */
+.prompt__option--current { border-color: var(--ag-primary); background: color-mix(in srgb, var(--ag-primary) 12%, var(--ag-surface)); }
+/* The choice the user just clicked — fills in before the card clears. */
+.prompt__option--picked { background: var(--ag-primary); color: var(--ag-on-primary); border-color: var(--ag-primary); }
+.prompt__option--picked::after { opacity: 0; }
+.prompt__cancel {
+  cursor: pointer; font: inherit; font-weight: 500; font-size: 12px;
+  color: var(--ag-on-surface-variant); background: transparent; border: none;
+  padding: 8px 14px; border-radius: var(--ag-shape-full);
+}
+.prompt__cancel:hover { color: var(--ag-on-surface); background: color-mix(in srgb, var(--ag-on-surface) 10%, transparent); }
+/* Once answered, lock the card and fade the options not chosen. */
+.prompt--answered .prompt__options, .prompt--answered .prompt__actions { pointer-events: none; }
+.prompt--answered .prompt__option:not(.prompt__option--picked) { opacity: 0.5; }
+/* Keyboard focus: the whole card is focusable so ↑/↓ drive the live TUI caret. */
+.prompt:focus { outline: none; }
+.prompt:focus-visible { outline: 2px solid color-mix(in srgb, var(--ag-primary) 60%, transparent); outline-offset: 3px; }
+
+/* Multi-select checkbox rows (two-way bound to the TUI's [ ]/[x]). */
+.prompt__option--check { display: flex; align-items: center; gap: 12px; }
+.prompt__check {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 7px; position: relative;
+  border: 2px solid var(--ag-outline); background: transparent;
+  transition: background var(--ag-dur-short) var(--ag-ease-emphasized), border-color var(--ag-dur-short) var(--ag-ease-emphasized);
+}
+.prompt__check.is-checked { background: var(--ag-primary); border-color: var(--ag-primary); }
+.prompt__check.is-checked::after {
+  content: ""; position: absolute; left: 6px; top: 2px; width: 5px; height: 10px;
+  border: solid var(--ag-on-primary); border-width: 0 2.5px 2.5px 0; transform: rotate(45deg);
+}
+.prompt__label { flex: 1 1 auto; min-width: 0; }
+
+/* "Write-in" option: choosing it makes the CLI wait for text typed in the chat. */
+.prompt__option--writein { font-style: italic; color: var(--ag-on-surface-variant); }
+
+/* The dedicated text box that pops up after a write-in is chosen (#5). */
+.writein {
+  align-self: stretch; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 14px;
+  background: var(--ag-surface-container-highest); border: 1.5px solid var(--ag-primary);
+  border-radius: var(--ag-shape-lg); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ag-primary) 14%, transparent);
+  animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both;
+}
+.writein__input { flex: 1 1 auto; min-width: 0; border: none; outline: none; background: transparent; color: var(--ag-on-surface); font: inherit; padding: 6px 0; }
+.writein__input::placeholder { color: var(--ag-on-surface-variant); }
+.writein__send {
+  flex: 0 0 auto; cursor: pointer; font: inherit; font-weight: 600; font-size: 12px;
+  color: var(--ag-on-primary); background: var(--ag-primary); border: none; padding: 7px 16px; border-radius: var(--ag-shape-full);
+}
+
+/* Action row (multi-select Submit + Skip/Cancel). */
+.prompt__actions { display: flex; align-items: center; gap: 10px; }
+.prompt__submit {
+  cursor: pointer; font: inherit; font-weight: 600; font-size: 13px;
+  color: var(--ag-on-primary); background: var(--ag-primary); border: none; padding: 8px 22px; border-radius: var(--ag-shape-full);
+  transition: box-shadow var(--ag-dur-medium) var(--ag-ease-emphasized), transform var(--ag-dur-short) var(--ag-ease-spring);
+}
+.prompt__submit:hover { box-shadow: 0 3px 14px color-mix(in srgb, var(--ag-primary) 50%, transparent); }
+.prompt__submit:active { transform: scale(0.96); }
+
+/* While the agent is busy or a selector is up, lock the input + expander but keep
+   the stop button usable (#6). */
+body.locked .field__input { opacity: 0.5; }
+body.locked #expand { opacity: 0.4; pointer-events: none; }
+body.locked .field { border-color: var(--ag-outline-variant); box-shadow: none; }
+/* While a selectable is shown, disable the WHOLE composer — including Stop — and
+   dim it; the user acts on the option card instead. */
+body.awaiting-prompt .composer { opacity: 0.55; }
+body.awaiting-prompt .field { pointer-events: none; }
+
+/* --- Material 3 (Expressive) loading indicator ----------------------------
+   m3.material.io/components/loading-indicator: a single primary-colored shape
+   that morphs through the shape library (circle <-> 4-lobe cookie) while it
+   rotates. The shape + motion are an inline SVG (SMIL) built in main.js; here we
+   just give it the primary color and keep it centered. */
+.m3-loader { color: var(--ag-primary); display: block; overflow: visible; }
+.session__running .m3-loader { color: var(--ag-primary); }
+
+/* --- Buttons --------------------------------------------------------------- */
+.btn {
+  position: relative; font: inherit; font-weight: 600; border: none; cursor: pointer;
+  padding: 12px 24px; border-radius: var(--ag-shape-full); background: var(--ag-primary); color: var(--ag-on-primary);
+  transition: transform var(--ag-dur-short) var(--ag-ease-spring), box-shadow var(--ag-dur-medium) var(--ag-ease-emphasized); overflow: hidden;
+}
+.btn::after { content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity var(--ag-dur-short) var(--ag-ease-emphasized); }
 .btn:hover::after { opacity: 0.08; }
 .btn:active { transform: scale(0.96); }
+/* Loading state for the gate action while the CLI is being probed (#7). */
+.btn:disabled { opacity: 0.65; cursor: default; }
+.btn:disabled::after { opacity: 0; }
+.btn--text { background: transparent; color: var(--ag-on-surface-variant); font-weight: 500; padding: 8px 12px; margin-top: 10px; display: block; width: 100%; }
+.btn--text::after { display: none; }
+.btn--text:hover { color: var(--ag-on-surface); }
 
-/* --- Chips (toggle + ghost) ------------------------------------------------ */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 6px 12px;
-  border-radius: var(--ag-shape-full);
-  border: 1px solid var(--ag-outline);
-  background: transparent;
-  color: var(--ag-on-surface-variant);
-  transition: background var(--ag-dur-short) var(--ag-ease-emphasized),
-              color var(--ag-dur-short) var(--ag-ease-emphasized),
-              border-color var(--ag-dur-short) var(--ag-ease-emphasized),
-              transform var(--ag-dur-short) var(--ag-ease-spring);
-}
-.chip:active { transform: scale(0.95); }
-.chip__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ag-outline); transition: background var(--ag-dur-short); }
-.chip[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--ag-tertiary) 22%, var(--ag-surface));
-  color: color-mix(in srgb, var(--ag-tertiary) 75%, var(--ag-on-surface));
-  border-color: transparent;
-}
-.chip[aria-pressed="true"] .chip__dot { background: var(--ag-tertiary); }
-.chip--ghost { border-style: dashed; }
-
-/* --- Composer (text field + send FAB) -------------------------------------- */
-.composer {
-  flex: 0 0 auto;
-  padding: 10px 14px 14px;
-  background: var(--ag-surface-container);
-  border-top: 1px solid var(--ag-outline-variant);
-}
-.composer__chips { display: flex; gap: 8px; margin-bottom: 10px; }
-
+/* --- Composer -------------------------------------------------------------- */
+.composer { flex: 0 0 auto; position: relative; padding: 10px 14px 14px; background: var(--ag-surface-container); border-top: 1px solid var(--ag-outline-variant); }
 .field {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  background: var(--ag-surface-container-highest);
-  border: 1.5px solid var(--ag-outline-variant);
-  border-radius: var(--ag-shape-lg);
-  padding: 8px 8px 8px 16px;
-  transition: border-color var(--ag-dur-medium) var(--ag-ease-emphasized),
-              box-shadow var(--ag-dur-medium) var(--ag-ease-emphasized);
+  /* #1: vertically center the textarea, expand button, and send/stop button. */
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  background: var(--ag-surface-container-highest); border: 1.5px solid var(--ag-outline-variant);
+  border-radius: var(--ag-shape-lg); padding: 8px 8px 8px 16px;
+  transition: border-color var(--ag-dur-medium) var(--ag-ease-emphasized), box-shadow var(--ag-dur-medium) var(--ag-ease-emphasized);
 }
-.field:focus-within {
-  border-color: var(--ag-primary);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ag-primary) 16%, transparent);
-}
+.field:focus-within { border-color: var(--ag-primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ag-primary) 16%, transparent); }
+/* min-width:0 lets the textarea shrink instead of forcing the row to overflow
+   and clip the expand/send buttons on a narrow panel. Collapsed (#1): a single
+   line, the overflow ellipsised. Expanded mode overrides this below. */
 .field__input {
-  flex: 1 1 auto;
-  resize: none;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--ag-on-surface);
-  font: inherit;
-  line-height: 1.45;
-  max-height: 160px;
-  padding: 6px 0;
+  flex: 1 1 auto; min-width: 0; resize: none; border: none; outline: none;
+  background: transparent; color: var(--ag-on-surface); font: inherit; line-height: 1.45; padding: 6px 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: auto;
 }
 .field__input::placeholder { color: var(--ag-on-surface-variant); }
+/* Send + expand buttons: a row when collapsed (expand left of send), a column
+   when expanded (send on top, collapse pinned at the bottom — #3). */
+.field__actions { flex: 0 0 auto; display: flex; flex-direction: row-reverse; align-items: center; gap: 8px; }
 
-/* The send FAB: M3 floating action button — round, elevated, springy. */
+.icon-btn {
+  flex: 0 0 auto; display: grid; place-items: center; width: 40px; height: 40px;
+  border: none; cursor: pointer; border-radius: var(--ag-shape-md); background: transparent; color: var(--ag-on-surface-variant);
+  transition: background var(--ag-dur-short) var(--ag-ease-emphasized), color var(--ag-dur-short), transform var(--ag-dur-short) var(--ag-ease-spring);
+}
+.icon-btn:hover { background: color-mix(in srgb, var(--ag-on-surface) 10%, transparent); color: var(--ag-on-surface); }
+.icon-btn:active { transform: scale(0.92); }
+.icon-btn .i-collapse { display: none; }
+
 .fab {
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 44px; height: 44px;
-  border: none;
-  cursor: pointer;
-  border-radius: var(--ag-shape-md);
-  background: var(--ag-primary);
-  color: var(--ag-on-primary);
+  flex: 0 0 auto; display: grid; place-items: center; width: 44px; height: 44px; border: none; cursor: pointer;
+  border-radius: var(--ag-shape-md); background: var(--ag-primary); color: var(--ag-on-primary);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--ag-primary) 40%, transparent);
-  transition: transform var(--ag-dur-short) var(--ag-ease-spring),
-              box-shadow var(--ag-dur-medium) var(--ag-ease-emphasized),
-              border-radius var(--ag-dur-medium) var(--ag-ease-spring),
-              background var(--ag-dur-short);
+  transition: transform var(--ag-dur-short) var(--ag-ease-emphasized), box-shadow var(--ag-dur-medium) var(--ag-ease-emphasized),
+              border-radius var(--ag-dur-medium) var(--ag-ease-emphasized), background var(--ag-dur-medium) var(--ag-ease-emphasized);
 }
 .fab:hover { box-shadow: 0 4px 16px color-mix(in srgb, var(--ag-primary) 55%, transparent); border-radius: var(--ag-shape-lg); }
-.fab:active { transform: scale(0.92); }
-.fab:disabled { opacity: 0.4; cursor: default; box-shadow: none; }
-.fab--stop { background: var(--ag-error); box-shadow: 0 2px 8px color-mix(in srgb, var(--ag-error) 40%, transparent); }
+/* #1: a small press depression, no springy overshoot. */
+.fab:active { transform: scale(0.97); }
+.fab .i-stop { display: none; }
+.fab[data-busy="true"] { background: var(--ag-warn); box-shadow: 0 2px 10px color-mix(in srgb, var(--ag-warn) 50%, transparent); }
+.fab[data-busy="true"] .i-send { display: none; }
+.fab[data-busy="true"] .i-stop { display: block; }
+/* Background-task chip (non-blocking loader for /tasks while idle). */
+.bgtask { display: flex; align-items: center; gap: 8px; margin: 0 2px 8px; font-size: 12px; color: var(--ag-on-surface-variant); }
+.bgtask__icon { display: inline-flex; }
+.composer__hint { margin: 8px 2px 0; font-size: 10.5px; color: var(--ag-on-surface-variant); }
+.composer__hint code { font-family: var(--ag-mono); }
 
-.composer__hint {
-  margin: 8px 2px 0;
-  font-size: 10.5px;
-  color: var(--ag-on-surface-variant);
+/* --- Slash-command navigator (#8) ----------------------------------------- */
+.slash {
+  position: absolute; left: 14px; right: 14px; bottom: calc(100% - 6px); max-height: 260px; overflow-y: auto; z-index: 5;
+  background: var(--ag-surface-container-highest); border: 1px solid var(--ag-outline-variant); border-radius: var(--ag-shape-md);
+  box-shadow: 0 8px 28px color-mix(in srgb, black 30%, transparent); padding: 6px; animation: rise var(--ag-dur-short) var(--ag-ease-emphasized) both;
 }
+.slash__item { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: var(--ag-shape-sm); cursor: pointer; }
+.slash__item:hover, .slash__item.selected { background: color-mix(in srgb, var(--ag-primary) 18%, transparent); }
+.slash__name { font-family: var(--ag-mono); font-weight: 600; color: var(--ag-on-surface); }
+.slash__desc { font-size: 11px; color: var(--ag-on-surface-variant); }
+.slash__empty { padding: 10px; color: var(--ag-on-surface-variant); font-size: 12px; }
 
-/* --- Scrollbar (slim, themed) ---------------------------------------------- */
-.transcript::-webkit-scrollbar { width: 10px; }
-.transcript::-webkit-scrollbar-thumb {
-  background: var(--ag-outline-variant);
-  border-radius: var(--ag-shape-full);
-  border: 3px solid transparent;
-  background-clip: content-box;
+/* --- Expanded composer mode (#6) + dropup reservation (#2) ----------------- */
+body.expanded .app-bar, body.expanded #chatarea { display: none !important; }
+body.expanded #composer { display: flex !important; flex-direction: column; flex: 1 1 auto; }
+/* The field fills the panel; the textarea takes all remaining space (so the whole
+   region is clickable — #2) and the buttons stack on the right (#3). */
+body.expanded .field { flex: 1 1 auto; align-items: stretch; }
+body.expanded .field__input {
+  height: 100%; max-height: none; white-space: pre-wrap; overflow-y: auto; overflow-x: hidden; text-overflow: clip;
 }
-.transcript::-webkit-scrollbar-thumb:hover { background: var(--ag-outline); background-clip: content-box; }
+/* #2: collapse on top, send pinned at the bottom. */
+body.expanded .field__actions { flex-direction: column-reverse; justify-content: space-between; align-self: stretch; }
+body.expanded #expand .i-expand { display: none; }
+body.expanded #expand .i-collapse { display: block; }
+body.expanded.slash-open #composer { padding-top: 274px; }
+body.expanded.slash-open .slash { top: 6px; bottom: auto; }
 
-/* --- Reduced motion: honor the OS/user preference -------------------------- */
+/* --- Scrollbars + reduced motion ------------------------------------------ */
+.transcript::-webkit-scrollbar, .slash::-webkit-scrollbar, .list::-webkit-scrollbar { width: 10px; }
+.transcript::-webkit-scrollbar-thumb, .slash::-webkit-scrollbar-thumb, .list::-webkit-scrollbar-thumb {
+  background: var(--ag-outline-variant); border-radius: var(--ag-shape-full); border: 3px solid transparent; background-clip: content-box;
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
-  .app-bar__mark { animation: none; }
 }

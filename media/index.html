@@ -2,56 +2,102 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- CSP is injected by the provider; it allows only our nonce'd script and
-         webview-local styles/fonts. No remote origins (the dev sandbox is
-         firewalled, and it is good hygiene regardless). -->
     <meta http-equiv="Content-Security-Policy" content="{{csp}}" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="{{styleUri}}" rel="stylesheet" />
-    <title>Antigravity Chat</title>
+    <title>Antigravity</title>
   </head>
-  <body>
-    <!-- App shell. The header reflects readiness; the transcript holds the
-         conversation; the composer is a Material 3 text field + send FAB. -->
+  <!-- data-view ∈ {gate, list, chat} controls which section is visible. -->
+  <body data-view="gate">
     <header class="app-bar">
       <div class="app-bar__title">
-        <span class="app-bar__mark" aria-hidden="true"></span>
+        <!-- Back to the sessions list (#5); shown only in the chat step. -->
+        <button id="back" class="icon-btn app-bar__back" type="button" title="Back to sessions" aria-label="Back to sessions">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15.5 4.5 8 12l7.5 7.5 1.4-1.4L10.8 12l6.1-6.1z"/></svg>
+        </button>
+        <!-- #1/#6: the brand logo (media/logo.svg). -->
+        <img class="app-bar__logo" src="{{logoUri}}" alt="" aria-hidden="true" />
         <span>Antigravity</span>
       </div>
-      <div class="app-bar__meta" id="meta"></div>
     </header>
 
-    <main id="transcript" class="transcript" aria-live="polite">
-      <!-- Onboarding / welcome content is injected here when not ready. -->
+    <!-- CLI not found page. -->
+    <section id="notfound" class="gate">
+      <div class="gate__card">
+        <img class="gate__logo" src="{{logoUri}}" alt="" aria-hidden="true" />
+        <h2>CLI not found</h2>
+        <p>The <strong>Antigravity CLI</strong> (<code>agy</code>) wasn't found on your PATH.</p>
+        <p class="gate__install-hint">Install it from <a href="https://antigravity.google/product/antigravity-cli" class="gate__link">Antigravity CLI</a>, then set <code>antigravity.cliPath</code> if needed.</p>
+        <button id="notfound-refresh" class="btn btn--text" type="button">I've installed it — refresh</button>
+      </div>
+    </section>
+
+    <!-- Sign-in gate. -->
+    <section id="gate" class="gate">
+      <div class="gate__card">
+        <img class="gate__logo" src="{{logoUri}}" alt="" aria-hidden="true" />
+        <h2>Sign in to continue</h2>
+        <p id="gate-message">Sign in with your Google account to start using Antigravity.</p>
+        <button id="gate-action" class="btn" type="button">Sign in with Google</button>
+        <button id="gate-refresh" class="btn btn--text" type="button">I've signed in — refresh</button>
+        <button id="gate-skip" class="btn btn--text" type="button" hidden>Continue anyway →</button>
+      </div>
+    </section>
+
+    <!-- Step 1: sessions list (#5). -->
+    <section id="list" class="list">
+      <div class="list__actions">
+        <!-- New-session options: a dropdown of launch toggles tied to the
+             New Session button (#5). -->
+        <div class="newopts" id="newopts">
+          <button id="newopts-btn" class="icon-btn newopts__btn" type="button"
+            title="New session options" aria-label="New session options" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+          </button>
+          <div id="newopts-menu" class="newopts__menu" role="menu" hidden>
+            <label class="newopts__item"><input type="checkbox" id="opt-sandbox" /><span>Sandbox</span></label>
+            <label class="newopts__item"><input type="checkbox" id="opt-skip" /><span>Bypass permissions</span></label>
+          </div>
+        </div>
+        <button id="new-session" class="btn list__new" type="button">＋ New Session</button>
+      </div>
+      <div id="sessions" class="sessions" role="list"></div>
+      <p id="sessions-empty" class="sessions__empty">No sessions yet. Start one above.</p>
+    </section>
+
+    <!-- Step 2: per-session chat. -->
+    <main id="chatarea" class="chatarea">
+      <!-- The most recent user input scrolled above the fold, pinned just below
+           the app bar (#2). It changes as you scroll up; "Show more" expands it
+           when it's taller than the clamp. -->
+      <div id="pinned" class="pinned" hidden>
+        <div id="pinned-body" class="pinned__body"></div>
+        <button id="pinned-more" class="showmore" type="button" hidden>Show more</button>
+      </div>
+      <div id="transcript" class="transcript" aria-live="polite"></div>
     </main>
 
-    <footer class="composer">
-      <div class="composer__chips">
-        <button id="goalChip" class="chip" type="button" aria-pressed="false" title="Run the task to completion without pausing for approval">
-          <span class="chip__dot"></span> Goal mode
-        </button>
-        <button id="settingsChip" class="chip chip--ghost" type="button" title="Open Antigravity settings">Settings</button>
-      </div>
+    <footer id="composer" class="composer">
+      <div id="slash" class="slash" hidden role="listbox" aria-label="Slash commands"></div>
+      <!-- Non-blocking indicator while a background task (/tasks) is running. -->
+      <div id="bgtask" class="bgtask" hidden><span id="bgtask-icon" class="bgtask__icon"></span><span>Working in the background…</span></div>
       <div class="field">
-        <textarea
-          id="input"
-          class="field__input"
-          rows="1"
-          placeholder="Ask Antigravity to build, fix, or explain…"
-          aria-label="Message Antigravity"
-        ></textarea>
-        <button id="send" class="fab" type="button" title="Send (Enter)" aria-label="Send">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12 2-12 2z" />
-          </svg>
-        </button>
-        <button id="stop" class="fab fab--stop" type="button" title="Stop" aria-label="Stop" hidden>
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
-          </svg>
-        </button>
+        <textarea id="input" class="field__input" rows="1"
+          placeholder="Ask Antigravity, or type / for commands…" aria-label="Message Antigravity"></textarea>
+        <!-- Send + expand share a container so we can switch row (collapsed) ⇄
+             column (expanded: send on top, collapse at the bottom) and FLIP-animate. -->
+        <div class="field__actions">
+          <button id="action" class="fab" type="button" data-busy="false" title="Send (Enter)" aria-label="Send">
+            <svg class="i-send" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12 2-12 2z"/></svg>
+            <svg class="i-stop" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg>
+          </button>
+          <button id="expand" class="icon-btn" type="button" title="Expand editor" aria-label="Expand editor">
+            <svg class="i-expand" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M9 3H3v6h2V6.4L9.6 11 11 9.6 6.4 5H9V3zm6 18h6v-6h-2v2.6L14.4 13 13 14.4l4.6 4.6H15v2z"/></svg>
+            <svg class="i-collapse" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M4 14h2v2.6L10.6 12 12 13.4 7.4 18H10v2H4v-6zm16-4h-2V7.4L13.4 12 12 10.6 16.6 6H14V4h6v6z"/></svg>
+          </button>
+        </div>
       </div>
-      <p class="composer__hint">Enter to send · Shift+Enter for a new line</p>
+      <p class="composer__hint">Enter to send · Shift+Enter for a new line · <code>/</code> for commands</p>
     </footer>
 
     <script nonce="{{nonce}}" src="{{scriptUri}}"></script>

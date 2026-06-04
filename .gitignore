@@ -3,3 +3,9 @@ dist/
 out/
 *.vsix
 .vscode-test/
+
+# agy runtime artifacts it may drop in the project dir
+cache/
+.antigravitycli/
+
+random/

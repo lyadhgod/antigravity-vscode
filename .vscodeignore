@@ -17,3 +17,6 @@ tsconfig*.json
 .gitignore
 .editorconfig
 **/.DS_Store
+.vscode/**
+cache/**
+.antigravitycli/**

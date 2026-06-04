@@ -1,18 +1,15 @@
 /**
- * Owns the VS Code integrated terminal(s) used for everything that is inherently
- * interactive and best handled by the CLI's own TUI:
- *   - the full agent session (`agy`),
- *   - the Google sign-in flow (first run of `agy` opens a browser / prints a
- *     code), and
- *   - install/update commands.
+ * Owns the VS Code integrated terminal(s) used for the CLI lifecycle actions
+ * that want a real, user-visible TTY: the Google sign-in flow, install/update,
+ * changelog, and plugin management.
  *
- * Headless prompts go through {@link CliService.runPrint} instead and render in
- * the Material 3 chat panel; this service is for the cases where a live TTY is
- * the right tool.
+ * Chat is separate: each session drives its own interactive `agy` via
+ * [services/interactiveSession.ts], mirrored into a terminal on demand. This
+ * service handles the standalone command-palette actions.
  */
 import * as vscode from "vscode";
 
-import { buildSessionArgs, buildUpdateArgs, quoteCommand } from "../core/argBuilder";
+import { buildSessionArgs, buildSubcommandArgs, quoteCommand } from "../core/argBuilder";
 import { SessionOptions } from "../core/types";
 import { CliService } from "./cliService";
 
@@ -21,15 +18,16 @@ const TERMINAL_NAME = "Antigravity";
 
 export class TerminalService {
   private terminal: vscode.Terminal | undefined;
+  /** True once an interactive `agy` session has been launched in the terminal. */
+  private sessionActive = false;
 
   constructor(private readonly cli: CliService) {}
 
   /** Returns the shared Antigravity terminal, creating it if needed. */
   private getTerminal(): vscode.Terminal {
-    // VS Code disposes terminals when the user closes them; detect that and
-    // recreate so we never send text to a dead terminal.
     if (!this.terminal || this.isClosed(this.terminal)) {
       this.terminal = vscode.window.createTerminal({ name: TERMINAL_NAME, iconPath: new vscode.ThemeIcon("rocket") });
+      this.sessionActive = false; // a fresh terminal has no running session
     }
     return this.terminal;
   }
@@ -44,6 +42,21 @@ export class TerminalService {
     const command = this.cli.resolveCommand();
     const args = buildSessionArgs(options, this.cli.getConfig());
     this.run(quoteCommand(command, args));
+    this.sessionActive = true;
+  }
+
+  /**
+   * Sends a slash command to the interactive session. If no session is running
+   * yet, one is started first; the terminal queues the command so the TUI picks
+   * it up once it is ready.
+   */
+  sendSlashCommand(line: string): void {
+    if (!this.sessionActive || !this.terminal || this.isClosed(this.terminal)) {
+      this.startSession();
+    } else {
+      this.terminal.show(true);
+    }
+    this.getTerminal().sendText(line, true);
   }
 
   /**
@@ -52,37 +65,38 @@ export class TerminalService {
    * authorization URL plus a one-time code in this terminal.
    */
   login(): void {
-    // Running the bare TUI is the documented entry point for first-run auth.
     this.startSession();
     vscode.window.showInformationMessage(
-      "Antigravity sign-in started in the terminal. If a browser does not open, follow the printed URL and code."
+      "Antigravity sign-in started in the terminal. If a browser does not open, follow the printed URL and code, then reload."
     );
   }
 
-  /**
-   * Signs the user out. The CLI clears credentials via its `/logout` slash
-   * command inside the TUI, so we open a session and send it.
-   */
+  /** Signs out via the TUI's `/logout` slash command. */
   logout(): void {
-    this.startSession();
-    this.getTerminal().sendText("/logout", true);
+    this.sendSlashCommand("/logout");
   }
 
   /** Runs the CLI self-update command. */
   update(): void {
-    const command = this.cli.resolveCommand();
-    this.run(quoteCommand(command, buildUpdateArgs()));
+    this.runSubcommand("update");
   }
 
-  /**
-   * Runs the configured install command. Used when the binary is missing, so it
-   * intentionally does not depend on resolving `agy` first.
-   */
-  install(): void {
-    this.run(this.cli.getConfig().installCommand);
-    vscode.window.showInformationMessage(
-      "Installing the Antigravity CLI in the terminal. After it finishes, run “Antigravity: Sign In”."
-    );
+  /** Shows the CLI changelog in the terminal. */
+  changelog(): void {
+    this.runSubcommand("changelog");
+  }
+
+  /** Runs a plugin management command, e.g. `plugin list`. */
+  runPluginCommand(args: string[]): void {
+    const command = this.cli.resolveCommand();
+    this.run(quoteCommand(command, ["plugin", ...args]));
+  }
+
+  /** Runs a bare subcommand (`update`, `changelog`). */
+  private runSubcommand(sub: "update" | "changelog"): void {
+    const command = this.cli.resolveCommand();
+    this.run(quoteCommand(command, buildSubcommandArgs(sub)));
+    this.sessionActive = false; // a subcommand is not an interactive session
   }
 
   /** Shows the terminal and sends a command line to it. */

@@ -1,35 +1,28 @@
 /**
- * Pure functions that translate high-level intents (run a headless prompt,
- * start an interactive session, sign in, …) into the exact `agy` argument
- * vectors. Keeping this logic free of `vscode` and side effects makes the most
- * error-prone part of a CLI wrapper — the flags — fully unit-testable.
+ * Pure functions that translate high-level intents into the exact `agy`
+ * argument vectors. Keeping this logic free of `vscode` and side effects makes
+ * the most error-prone part of a CLI wrapper — the flags — fully unit-testable.
  *
- * Flag names follow the documented Antigravity CLI surface:
- *   --print / -p, --output-format, --model, --add-dir, --continue / -c,
- *   --conversation, --prompt-interactive / -i, --dangerously-skip-permissions,
- *   --print-timeout, --version.
+ * Flags verified against the real `agy` v1.0.4 `--help`:
+ *   --continue/-c, --conversation <id>, --prompt-interactive/-i,
+ *   --add-dir <path> (repeatable), --dangerously-skip-permissions, --sandbox.
+ * Subcommands: install, update, changelog, plugin.
+ * There is intentionally NO --model and NO --output-format (the CLI rejects
+ * them). Chat uses the interactive TUI, so there is no print-args builder here.
  */
-import { AntigravityConfig, PrintOptions, SessionOptions } from "./types";
-
-/** The `/goal ` prefix tells the agent to run a task to completion. */
-const GOAL_PREFIX = "/goal ";
+import { AntigravityConfig, SessionOptions } from "./types";
 
 /**
- * Appends flags that are common to every model-driven invocation: the model,
- * the workspace directories, permission-skipping, and any user `extraArgs`.
- * Mutates and returns `args` for ergonomic chaining.
+ * Appends flags common to model-driven invocations: workspace directories,
+ * sandbox, permission-skipping, and any user `extraArgs`. Mutates and returns
+ * `args` for ergonomic chaining.
  */
-function applyCommonFlags(
-  args: string[],
-  config: AntigravityConfig,
-  opts: { addDirs?: string[]; model?: string }
-): string[] {
-  const model = opts.model || config.model;
-  if (model) {
-    args.push("--model", model);
-  }
-  for (const dir of opts.addDirs ?? []) {
+function applyCommonFlags(args: string[], config: AntigravityConfig, addDirs?: string[]): string[] {
+  for (const dir of addDirs ?? []) {
     args.push("--add-dir", dir);
+  }
+  if (config.sandbox) {
+    args.push("--sandbox");
   }
   if (config.skipPermissions) {
     args.push("--dangerously-skip-permissions");
@@ -41,36 +34,8 @@ function applyCommonFlags(
 }
 
 /**
- * Builds the argv for a headless prompt (`agy --print …`). The prompt text is
- * always the final argument so it is never mistaken for a flag value.
- */
-export function buildPrintArgs(opts: PrintOptions, config: AntigravityConfig): string[] {
-  const args: string[] = ["--print"];
-
-  if (config.outputFormat) {
-    args.push("--output-format", config.outputFormat);
-  }
-  // Per-call timeout mirrors the configured budget so a hung agent is bounded.
-  if (config.printTimeoutMs > 0) {
-    args.push("--print-timeout", String(config.printTimeoutMs));
-  }
-  if (opts.continueConversation) {
-    args.push("--continue");
-  }
-  if (opts.conversationId) {
-    args.push("--conversation", opts.conversationId);
-  }
-
-  applyCommonFlags(args, config, { addDirs: opts.addDirs, model: opts.model });
-
-  const prompt = opts.goal ? GOAL_PREFIX + opts.prompt : opts.prompt;
-  args.push(prompt);
-  return args;
-}
-
-/**
- * Builds the argv for an interactive TUI session launched in a terminal.
- * With no options this is simply `agy` (bare), which opens the full TUI.
+ * Builds the argv for an interactive TUI session. With no options this is an
+ * empty argv (bare `agy` opens the full TUI).
  */
 export function buildSessionArgs(opts: SessionOptions, config: AntigravityConfig): string[] {
   const args: string[] = [];
@@ -82,10 +47,15 @@ export function buildSessionArgs(opts: SessionOptions, config: AntigravityConfig
     args.push("--conversation", opts.conversationId);
   }
 
-  applyCommonFlags(args, config, { addDirs: opts.addDirs, model: opts.model });
+  // Per-session toggles (the New Session menu, #5) override the global settings
+  // when provided; `??` keeps the config default when an option is left unset.
+  const effective: AntigravityConfig = {
+    ...config,
+    sandbox: opts.sandbox ?? config.sandbox,
+    skipPermissions: opts.skipPermissions ?? config.skipPermissions
+  };
+  applyCommonFlags(args, effective, opts.addDirs);
 
-  // An initial prompt is passed last via the interactive variant so the TUI
-  // opens pre-seeded but still interactive.
   if (opts.initialPrompt) {
     args.push("--prompt-interactive", opts.initialPrompt);
   }
@@ -97,18 +67,15 @@ export function buildVersionArgs(): string[] {
   return ["--version"];
 }
 
-/**
- * Argv for self-update (`agy update`). Subcommand, not a flag, so it leads.
- */
-export function buildUpdateArgs(): string[] {
-  return ["update"];
+/** Argv for a subcommand with no extra flags (e.g. `update`, `changelog`). */
+export function buildSubcommandArgs(subcommand: "update" | "changelog", rest: string[] = []): string[] {
+  return [subcommand, ...rest];
 }
 
 /**
  * Renders an argv array back into a copy-pasteable shell command string,
- * quoting only the arguments that actually need it. Used for terminal display
- * and the "Install CLI" affordance — never for execution (we always spawn with
- * an explicit argv to avoid shell injection).
+ * quoting only the arguments that actually need it. Used for terminal display —
+ * never for execution (we always spawn with an explicit argv).
  */
 export function quoteCommand(command: string, args: string[]): string {
   return [command, ...args].map(quoteArg).join(" ");
@@ -119,10 +86,8 @@ function quoteArg(arg: string): string {
   if (arg.length === 0) {
     return "''";
   }
-  // Safe shell tokens (no whitespace or metacharacters) are shown bare.
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) {
     return arg;
   }
-  // Otherwise single-quote and escape embedded single quotes.
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }

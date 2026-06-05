@@ -12,6 +12,7 @@ jobs:
   release:
     name: Build & publish release
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: write   # create tags + GitHub releases
     env:
@@ -154,3 +155,10 @@ jobs:
           prerelease: ${{ contains(steps.ver.outputs.current, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 9. Publish to VS Code Marketplace ────────────────────────────────────
+      - name: Publish to VS Code Marketplace
+        if: steps.ver.outputs.changed == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: vsce publish --pat "$VSCE_PAT" --packagePath "$vsix"

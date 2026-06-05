@@ -4,16 +4,22 @@
   "description": "Bring Google's Antigravity CLI (agy) into VS Code: an agentic coding companion with a Material 3 Expressive chat UI, a slash-command navigator, interactive sessions with in-chat option pickers, and Google sign-in.",
   "version": "0.13.0",
   "license": "MIT",
-  "publisher": "antigravity-community",
+  "publisher": "lyadhgod",
   "engines": {
     "vscode": "^1.90.0"
   },
+  "icon": "media/logo.png",
+  "homepage": "https://github.com/lyadhgod/antigravity-vscode",
+  "bugs": {
+    "url": "https://github.com/lyadhgod/antigravity-vscode/issues"
+  },
+  "qna": false,
   "categories": [
     "AI",
-    "Chat",
-    "Other"
+    "Chat"
   ],
   "keywords": [
+    "google",
     "antigravity",
     "agy",
     "gemini",
@@ -23,7 +29,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/antigravity-community/antigravity-vscode"
+    "url": "https://github.com/lyadhgod/antigravity-vscode"
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -77,7 +83,8 @@
         {
           "id": "antigravity.chatView",
           "name": "Chat",
-          "type": "webview"
+          "type": "webview",
+          "icon": "media/icon.svg"
         }
       ]
     },

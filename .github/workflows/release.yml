@@ -1,0 +1,160 @@
+name: Release
+
+# Triggers when a push to main changes package.json — the version bump is the
+# canonical signal. The job checks whether the version actually changed (not just
+# the file) so a pure metadata edit doesn't create a spurious release.
+on:
+  push:
+    branches: [main]
+    paths: [package.json]
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create tags + GitHub releases
+
+    steps:
+      # ── 1. Checkout with full history so we can diff from the last tag ──────
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history — needed for git log range and tagging
+
+      # ── 2. Detect version change ─────────────────────────────────────────────
+      # Compare package.json on HEAD vs its state on HEAD^ (the previous commit).
+      # If the version field didn't change, skip the rest entirely.
+      - name: Read current version
+        id: ver
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          PREVIOUS=$(git show HEAD^:package.json 2>/dev/null \
+            | node -p "let d=''; process.stdin.on('data',c=>d+=c); \
+                       process.stdin.on('end',()=>{ \
+                         try{ process.stdout.write(JSON.parse(d).version); } \
+                         catch{ process.stdout.write('0.0.0'); } \
+                       });" \
+            || echo "0.0.0")
+          echo "current=$CURRENT"  >> "$GITHUB_OUTPUT"
+          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT" = "$PREVIOUS" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if version unchanged
+        if: steps.ver.outputs.changed == 'false'
+        run: |
+          echo "package.json changed but version is still ${{ steps.ver.outputs.current }} — skipping release."
+
+      # ── 3. Set up Node ───────────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        if: steps.ver.outputs.changed == 'true'
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.ver.outputs.changed == 'true'
+        run: npm ci
+
+      # ── 4. Run tests ─────────────────────────────────────────────────────────
+      - name: Test
+        if: steps.ver.outputs.changed == 'true'
+        run: npm test
+
+      # ── 5. Build the .vsix package ───────────────────────────────────────────
+      - name: Package extension
+        if: steps.ver.outputs.changed == 'true'
+        run: |
+          npm install -g @vscode/vsce
+          vsce package --allow-missing-repository
+          # Capture the generated filename for later steps
+          VSIX=$(ls *.vsix | head -1)
+          echo "vsix=$VSIX" >> "$GITHUB_ENV"
+
+      # ── 6. Build changelog for this release ──────────────────────────────────
+      # If a previous tag (v<version>) exists, use git log from that tag.
+      # If no tag exists yet, use the entire history of main.
+      - name: Build release notes
+        if: steps.ver.outputs.changed == 'true'
+        id: notes
+        env:
+          VERSION: ${{ steps.ver.outputs.current }}
+        run: |
+          TAG="v${VERSION}"
+          PREV_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1)
+
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+            echo "Using range: $RANGE"
+          else
+            RANGE="HEAD"
+            echo "No prior tag — using full history"
+          fi
+
+          # ── Structured changelog from CHANGELOG.md ───────────────────────
+          # Extract the block for this version (between its ## heading and the next)
+          CHANGELOG_SECTION=$(awk \
+            "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" \
+            CHANGELOG.md)
+
+          # ── Commit log as a fallback / supplement ────────────────────────
+          COMMITS=$(git log $RANGE \
+            --pretty=format:"- %s (%h)" \
+            --no-merges \
+            | grep -v "^- Merge\|^- chore(release)\|^- version bump" \
+            | head -60)
+
+          # ── Assemble release notes ───────────────────────────────────────
+          {
+            echo "## What's new in ${TAG}"
+            echo ""
+            if [ -n "$CHANGELOG_SECTION" ]; then
+              echo "$CHANGELOG_SECTION"
+              echo ""
+              echo "---"
+              echo ""
+            fi
+            echo "### Commits since ${PREV_TAG:-beginning}"
+            echo ""
+            if [ -n "$COMMITS" ]; then
+              echo "$COMMITS"
+            else
+              echo "_No user-visible commits in this range._"
+            fi
+            echo ""
+            echo "---"
+            echo ""
+            echo "**Full diff:** [\`${PREV_TAG:-initial}..$TAG\`](https://github.com/lyadhgod/antigravity-vscode/compare/${PREV_TAG:-}...${TAG})"
+          } > release_notes.md
+
+          cat release_notes.md   # echo to the Actions log
+
+      # ── 7. Create and push the git tag ───────────────────────────────────────
+      - name: Tag the release
+        if: steps.ver.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.current }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${VERSION}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release ${TAG}"
+          git push origin "$TAG"
+
+      # ── 8. Create the GitHub release ─────────────────────────────────────────
+      - name: Create GitHub release
+        if: steps.ver.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.current }}
+          name: "v${{ steps.ver.outputs.current }}"
+          body_path: release_notes.md
+          files: ${{ env.vsix }}
+          draft: false
+          prerelease: ${{ contains(steps.ver.outputs.current, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

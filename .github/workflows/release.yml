@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create tags + GitHub releases
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       # ── 1. Checkout with full history so we can diff from the last tag ──────
@@ -29,10 +31,10 @@ jobs:
         run: |
           CURRENT=$(node -p "require('./package.json').version")
           PREVIOUS=$(git show HEAD^:package.json 2>/dev/null \
-            | node -p "let d=''; process.stdin.on('data',c=>d+=c); \
+            | node -e "let d=''; process.stdin.on('data',c=>d+=c); \
                        process.stdin.on('end',()=>{ \
                          try{ process.stdout.write(JSON.parse(d).version); } \
-                         catch{ process.stdout.write('0.0.0'); } \
+                         catch(e){ process.stdout.write('0.0.0'); } \
                        });" \
             || echo "0.0.0")
           echo "current=$CURRENT"  >> "$GITHUB_OUTPUT"

@@ -29,14 +29,8 @@ jobs:
       - name: Read current version
         id: ver
         run: |
-          CURRENT=$(node -p "require('./package.json').version")
-          PREVIOUS=$(git show HEAD^:package.json 2>/dev/null \
-            | node -e "let d=''; process.stdin.on('data',c=>d+=c); \
-                       process.stdin.on('end',()=>{ \
-                         try{ process.stdout.write(JSON.parse(d).version); } \
-                         catch(e){ process.stdout.write('0.0.0'); } \
-                       });" \
-            || echo "0.0.0")
+          CURRENT=$(jq -r '.version' package.json)
+          PREVIOUS=$(git show HEAD^:package.json 2>/dev/null | jq -r '.version // "0.0.0"' || echo "0.0.0")
           echo "current=$CURRENT"  >> "$GITHUB_OUTPUT"
           echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
           if [ "$CURRENT" = "$PREVIOUS" ]; then

@@ -12,6 +12,8 @@ official CLI does the work. The extension never bundles the CLI — it drives th
 > **Unofficial / community extension.** Not affiliated with or endorsed by
 > Google. "Antigravity" and "Gemini" are trademarks of Google LLC.
 
+![Antigravity for VS Code in action](media/demo.gif)
+
 ---
 
 ## Features

@@ -22,6 +22,7 @@
  * its process; the process exiting tells the view to drop the session.
  */
 import { ChildProcess, spawn } from "node:child_process";
+import * as pty from "node-pty";
 
 import { Terminal } from "@xterm/headless";
 
@@ -116,23 +117,40 @@ export class InteractiveSessionService {
       config
     );
 
-    // Build `stty <size>; exec agy …` and hand it to `script` as a single -c arg.
-    const sh = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
-    const inner =
-      `stty rows ${PTY_ROWS} cols ${PTY_COLS} 2>/dev/null; exec ` +
-      [agy, ...argv].map(sh).join(" ");
-
-    const proc = spawn("script", ["-q", "-e", "-c", inner, "/dev/null"], {
-      cwd: dirs[0],
-      env: { ...process.env, TERM: "xterm-256color" }
-    });
+    let proc: any;
+    if (process.platform === "win32") {
+      const ptyProcess = pty.spawn(agy, argv, {
+        name: "xterm-256color",
+        cols: PTY_COLS,
+        rows: PTY_ROWS,
+        cwd: dirs[0]
+      });
+      proc = {
+        stdin: { write: (data: string) => ptyProcess.write(data) },
+        stdout: ptyProcess,
+        stderr: null,
+        kill: (sig: string) => { try { ptyProcess.kill(); } catch {} },
+        on: (evt: string, cb: any) => {
+          if (evt === "exit") ptyProcess.onExit(e => cb(e.exitCode));
+        }
+      };
+    } else {
+      const sh = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
+      const inner =
+        `stty rows ${PTY_ROWS} cols ${PTY_COLS} 2>/dev/null; exec ` +
+        [agy, ...argv].map(sh).join(" ");
+      proc = spawn("script", ["-q", "-e", "-c", inner, "/dev/null"], {
+        cwd: dirs[0],
+        env: { ...process.env, TERM: "xterm-256color" }
+      });
+    }
 
     const term = new Terminal({ cols: PTY_COLS, rows: PTY_ROWS, scrollback: 5000, allowProposedApi: true });
-    const entry: Live = { proc, term, observer, raw: "", lastSerialized: "", ready: false, queue: [] };
+    const entry: Live = { proc: proc as any, term, observer, raw: "", lastSerialized: "", ready: false, queue: [] };
     this.live.set(id, entry);
 
-    const onData = (buf: Buffer): void => {
-      const text = buf.toString("utf8");
+    const onData = (buf: Buffer | string): void => {
+      const text = typeof buf === "string" ? buf : buf.toString("utf8");
       entry.raw += text;
       if (entry.raw.length > RAW_CAP) {
         entry.raw = entry.raw.slice(-RAW_CAP);
@@ -143,7 +161,7 @@ export class InteractiveSessionService {
     };
     proc.stdout?.on("data", onData);
     proc.stderr?.on("data", onData);
-    proc.on("exit", (code) => this.handleExit(id, code));
+    proc.on("exit", (code: number | null) => this.handleExit(id, code));
     proc.on("error", () => this.handleExit(id, null));
   }
 

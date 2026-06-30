@@ -7,7 +7,6 @@
 src/**
 test/**
 out/**
-node_modules/**
 docs/**
 **/*.ts
 **/*.map

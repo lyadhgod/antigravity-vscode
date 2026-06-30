@@ -86,7 +86,7 @@ function quoteArg(arg: string): string {
   if (arg.length === 0) {
     return "''";
   }
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) {
+  if (/^[A-Za-z0-9_@%+=:,./\\-]+$/.test(arg)) {
     return arg;
   }
   return `'${arg.replace(/'/g, "'\\''")}'`;

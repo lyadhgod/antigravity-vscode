@@ -248,12 +248,15 @@
     "test": "mocha",
     "lint": "tsc --noEmit"
   },
+  "overrides": {
+    "serialize-javascript": "^7.0.7"
+  },
   "devDependencies": {
     "@types/mocha": "^10.0.6",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.90.0",
     "@xterm/headless": "^6.0.0",
-    "esbuild": "^0.21.5",
+    "esbuild": "^0.25.0",
     "mocha": "^10.4.0",
     "typescript": "^5.4.5"
   }

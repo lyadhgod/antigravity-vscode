@@ -13,7 +13,7 @@
   "bugs": {
     "url": "https://github.com/lyadhgod/antigravity-vscode/issues"
   },
-  "qna": false,
+  "qna": "https://github.com/lyadhgod/antigravity-vscode/discussions/categories/q-a",
   "categories": [
     "AI",
     "Chat"

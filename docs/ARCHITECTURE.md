@@ -60,9 +60,11 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
 - **`ptyLauncher`** — decides how to put `agy` on a real PTY per platform: the
   `script`/`stty` shim on macOS/Linux, a `node-pty` ConPTY on Windows (#1, #2).
   Pure (the argv + `stty` string are unit-tested); the spawn itself lives in the
-  service. `node-pty` is an optional runtime require (external in esbuild), so
-  when it's absent on Windows the session reports that plainly and points at WSL
-  instead of ENOENT-ing on the missing `script`.
+  service. `node-pty` is declared as an **optionalDependency** and loaded via a
+  guarded runtime require (external in esbuild), so a platform where the native
+  build is unavailable still installs cleanly and — when the backend is absent on
+  Windows — the session reports that plainly and points at WSL instead of
+  ENOENT-ing on the missing `script`.
 - **`argBuilder`** — builds exact argv for session/version/subcommands; we always
   spawn with an explicit argv (no shell).
 - **`onboarding`** — install → sign‑in → ready decisions, the OAuth token path,

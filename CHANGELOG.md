@@ -30,8 +30,10 @@ real `agy` TUI end-to-end.
 - **Native Windows now reports the real cause instead of a misleading error
   (#1, #2).** The interactive session is launched through a platform-aware plan:
   the `script`/`stty` PTY shim on macOS/Linux (unchanged), and a `node-pty`
-  ConPTY on Windows. When the ConPTY backend isn't present, the user is told to
-  use WSL rather than seeing a bogus "agy isn't installed".
+  ConPTY on Windows (`node-pty` is declared as an optionalDependency so installs
+  never fail where its native build is unavailable). When the ConPTY backend
+  isn't present, the user is told to use WSL rather than seeing a bogus "agy
+  isn't installed".
 
 ### Changed
 

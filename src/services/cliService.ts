@@ -67,8 +67,15 @@ export class CliService {
   }
 
   /**
-   * Best-effort sign-in check: the CLI caches an OAuth token on disk after the
-   * Google sign-in flow. Presence of a non-empty token means "signed in".
+   * Best-effort sign-in check: older CLIs cache an OAuth token on disk after the
+   * Google sign-in flow, so a non-empty token file means "signed in" — a fast,
+   * reliable *positive*. It is NOT a reliable *negative*, though: newer CLIs keep
+   * the credential in the OS keychain (macOS Keychain) and a sign-in done in the
+   * terminal leaves no file we can read, so an authenticated user can still read
+   * as "signed out" (issues #3, #5). That is why the gate never hard-blocks on
+   * this result — the webview always offers "Continue anyway", and the live
+   * interactive session (which detects `state === "signin"`) is the real source
+   * of truth once a chat starts.
    */
   isAuthenticated(): boolean {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "";

@@ -23,7 +23,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as vscode from "vscode";
 
-import { AgyState, ScreenView, replyFor } from "../core/agyScreen";
+import { AgyState, ScreenView, findUrl, replyFor } from "../core/agyScreen";
 import { decideOnboarding } from "../core/onboarding";
 import { SessionPersistence, SessionStore } from "../core/sessionStore";
 import { SLASH_COMMANDS, findSlashCommand, parseSlash } from "../core/slashCommands";
@@ -34,6 +34,9 @@ import { HostToWebview, NewSessionOptions, WebviewToHost } from "./protocol";
 
 /** workspaceState key under which sessions are persisted. */
 const STORE_KEY = "antigravity.sessions.v1";
+
+/** Id of the hidden interactive session driving the in-GUI sign-in flow (never added to the session store/list). */
+const LOGIN_SESSION_ID = "__login__";
 
 /** Per-session live state held while its interactive process runs. */
 interface SessionRuntime {
@@ -64,6 +67,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private activeSessionId?: string;
   /** Live state keyed by session id; present iff a process is (being) run. */
   private readonly runtimes = new Map<string, SessionRuntime>();
+  /** Sign-in flow state (the hidden `LOGIN_SESSION_ID` session). */
+  private loginUrl?: string;
+  private loginUrlOpened = false;
+  /** Most recent screen that looked like the OAuth URL block, kept fresh while `loginUrlTimer` is pending. */
+  private loginUrlLines?: string[];
+  private loginUrlTimer?: ReturnType<typeof setTimeout>;
+  private loginMirror?: vscode.Terminal;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -251,6 +261,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const rt = this.ensureProcess(id);
     const title = this.store.get(id)?.title || "Antigravity";
+    rt.mirror = this.createMirror(id, `Antigravity: ${title}`);
+    rt.mirror.show();
+  }
+
+  /** Wires a Pseudoterminal mirroring the given interactive session's raw PTY output. */
+  private createMirror(id: string, name: string): vscode.Terminal {
     const writer = new vscode.EventEmitter<string>();
     const pty: vscode.Pseudoterminal = {
       onDidWrite: writer.event,
@@ -258,8 +274,123 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       close: () => this.interactive.detachMirror(id),
       handleInput: (data) => this.interactive.writeRaw(id, data)
     };
-    rt.mirror = vscode.window.createTerminal({ name: `Antigravity: ${title}`, pty });
-    rt.mirror.show();
+    return vscode.window.createTerminal({ name, pty });
+  }
+
+  // --- Sign-in flow (#7) ------------------------------------------------------
+  //
+  // Drives a hidden interactive `agy` (the same PTY→screen pipeline chat
+  // sessions use, under a dedicated id never added to the session store) so the
+  // gate can run the CLI's first-run login without a visible terminal: pick
+  // "Google OAuth", surface the OAuth URL + code box in the gate, accept the
+  // default color scheme, and only reveal a terminal for a screen it doesn't
+  // recognize (the browser-consent confirmation) — closing it and refreshing
+  // once the CLI reaches its normal ready prompt.
+
+  /** Starts (once) the sign-in flow — the gate's "Sign in with Google" button. */
+  startLogin(): void {
+    if (this.interactive.isRunning(LOGIN_SESSION_ID)) {
+      return;
+    }
+    this.resetLoginUrlState();
+    this.loginUrlOpened = false;
+    this.interactive.start(LOGIN_SESSION_ID, {
+      onScreen: (view, lines) => this.onLoginScreen(view, lines),
+      onExit: (_code, error) => this.onLoginExit(error)
+    });
+    // Visible for the whole flow (not just the unrecognized-screen fallback)
+    // so the automation is inspectable while it runs.
+    this.showLoginMirror();
+  }
+
+  /** Handles one settled screen frame from the sign-in session. */
+  private onLoginScreen(view: ScreenView, lines: string[]): void {
+    const prompt = view.prompt;
+    if (prompt) {
+      const oauthIndex = prompt.options.findIndex((o) => /oauth/i.test(o.label));
+      if (oauthIndex >= 0) {
+        this.interactive.selectOption(LOGIN_SESSION_ID, prompt.selectedIndex, oauthIndex, prompt.layout);
+      } else if (/color scheme/i.test(prompt.title)) {
+        // Accept the default (already-selected) scheme — just confirm it.
+        this.interactive.selectOption(LOGIN_SESSION_ID, prompt.selectedIndex, prompt.selectedIndex, prompt.layout);
+      }
+      // else: an unrecognized selector (the undocumented consent confirmation)
+      // — the mirror terminal is already visible, so the user can drive it directly.
+      return;
+    }
+    if (view.state === "idle") {
+      this.finishLogin();
+      return;
+    }
+    if (findUrl(lines)) {
+      // The URL block paints over more than one settled frame (each on its own
+      // is already debounced, but the CLI keeps adding rows across several of
+      // them) — keep the latest frame on hand, and give it a full second of
+      // quiet before trusting it, rather than acting on whatever is on screen
+      // the moment "http" first appears.
+      this.loginUrlLines = lines;
+      if (!this.loginUrlTimer && !this.loginUrlOpened) {
+        this.loginUrlTimer = setTimeout(() => this.commitLoginUrl(), 1000);
+      }
+      return;
+    }
+    // else: an unrecognized screen — nothing to automate, the visible mirror
+    // terminal already lets the user act on it directly.
+  }
+
+  /** Reads whatever the sign-in screen settled on ~1s after the URL first appeared. */
+  private commitLoginUrl(): void {
+    this.loginUrlTimer = undefined;
+    const url = this.loginUrlLines && findUrl(this.loginUrlLines);
+    if (!url || url === this.loginUrl) {
+      return;
+    }
+    this.loginUrl = url;
+    this.post({ type: "loginUrl", url });
+    if (!this.loginUrlOpened) {
+      this.loginUrlOpened = true;
+      void vscode.env.openExternal(vscode.Uri.parse(url));
+    }
+  }
+
+  /** The sign-in session reached the CLI's normal ready prompt — done. */
+  private finishLogin(): void {
+    this.interactive.dispose(LOGIN_SESSION_ID);
+    this.hideLoginMirror();
+    this.resetLoginUrlState();
+    void this.refreshState();
+  }
+
+  /** The sign-in session's process exited before reaching idle. */
+  private onLoginExit(error?: string): void {
+    this.hideLoginMirror();
+    this.resetLoginUrlState();
+    // `error` is set for a hard "can't run at all" cause (e.g. no Windows ConPTY
+    // backend, #1/#2); otherwise the flow was merely interrupted.
+    this.post({ type: "loginError", message: error ?? "Sign-in was interrupted. Try again." });
+  }
+
+  private resetLoginUrlState(): void {
+    this.loginUrl = undefined;
+    this.loginUrlLines = undefined;
+    clearTimeout(this.loginUrlTimer);
+    this.loginUrlTimer = undefined;
+  }
+
+  private showLoginMirror(): void {
+    if (this.loginMirror) {
+      return;
+    }
+    this.loginMirror = this.createMirror(LOGIN_SESSION_ID, "Antigravity Sign-in");
+    this.loginMirror.show();
+  }
+
+  private hideLoginMirror(): void {
+    if (this.loginMirror) {
+      this.interactive.detachMirror(LOGIN_SESSION_ID);
+      this.loginMirror.dispose();
+      this.loginMirror = undefined;
+    }
   }
 
   /** Re-probes the CLI and pushes readiness; when ready, also sends the list. */
@@ -349,6 +480,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "login":
         void vscode.commands.executeCommand("antigravity.login");
+        break;
+      case "loginSubmitCode":
+        this.interactive.send(LOGIN_SESSION_ID, msg.code);
+        break;
+      case "loginOpenUrl":
+        if (this.loginUrl) {
+          void vscode.env.openExternal(vscode.Uri.parse(this.loginUrl));
+        }
+        break;
+      case "loginCopyUrl":
+        if (this.loginUrl) {
+          void vscode.env.clipboard.writeText(this.loginUrl);
+          void vscode.window.showInformationMessage("Google OAuth sign-in link copied");
+        }
         break;
       case "openAnyway":
         // The disk sign-in check can be a false negative; let the user proceed.
@@ -467,7 +612,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         sessionId,
         {
           onScreen: (view) => this.onScreen(sessionId, view),
-          onExit: (code) => this.onExit(sessionId, code)
+          onExit: (code, error) => this.onExit(sessionId, code, error)
         },
         { sandbox: session?.sandbox, skipPermissions: session?.skipPermissions }
       );
@@ -557,7 +702,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** Handles a session's process exiting — drops the session (lifecycle #). */
-  private onExit(sessionId: string, _code: number | null): void {
+  private onExit(sessionId: string, _code: number | null, error?: string): void {
     const rt = this.runtimes.get(sessionId);
     this.runtimes.delete(sessionId);
     this.disposeMirror(sessionId);
@@ -570,10 +715,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       this.sendSessions();
     } else if (this.activeSessionId === sessionId) {
-      // Never reached the prompt — likely a startup/sign-in failure. Keep the
-      // session but tell the user, and re-check onboarding (maybe sign-in).
+      // Never reached the prompt. Prefer a specific cause when we have one (e.g.
+      // native Windows without a ConPTY backend, #1/#2); otherwise fall back to
+      // the generic hint and re-check onboarding (maybe a sign-in issue).
       this.post({ type: "busy", value: false });
-      this.system(sessionId, "The Antigravity session ended before it was ready. Check that `agy` is installed and you're signed in.");
+      this.system(
+        sessionId,
+        error ?? "The Antigravity session ended before it was ready. Check that `agy` is installed and you're signed in."
+      );
       void this.refreshState();
     }
   }

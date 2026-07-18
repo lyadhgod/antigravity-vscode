@@ -315,6 +315,25 @@
   }
   function cancelPrompt(card) { answerCard(card, null, -1); vscode.postMessage({ type: "promptCancel" }); }
 
+  // Renders one option's label. The live TUI packs a secondary description and a
+  // "(current)" marker onto the same row, separated by 2+ spaces, e.g.
+  // "request-review  (current)  Prompt for write, bash, and web tools" (seen on
+  // /model, /permissions, /hooks). Split that into a bold name, a "current" pill,
+  // and a muted description instead of showing one long run-on label.
+  function fillOptionLabel(host, labelText) {
+    const parts = String(labelText).split(/\s{2,}/).map((s) => s.trim()).filter(Boolean);
+    let isCurrent = false;
+    const rest = [];
+    for (const part of parts) {
+      if (/^\(?current\)?$/i.test(part)) { isCurrent = true; continue; }
+      rest.push(part);
+    }
+    const name = el("span", "prompt__name"); name.textContent = rest.shift() || String(labelText);
+    host.appendChild(name);
+    if (isCurrent) { const badge = el("span", "prompt__badge"); badge.textContent = "current"; host.appendChild(badge); }
+    if (rest.length) { const desc = el("span", "prompt__desc"); desc.textContent = rest.join(" — "); host.appendChild(desc); }
+  }
+
   function buildRow(card, p, o, i) {
     const current = i === p.selectedIndex ? " prompt__option--current" : "";
     if (o.writeIn) {
@@ -336,14 +355,15 @@
       const row = el("button", "prompt__option prompt__option--check" + current); row.type = "button"; row.tabIndex = -1;
       row.dataset.i = String(i); row.setAttribute("role", "checkbox"); row.setAttribute("aria-checked", String(!!o.checked));
       const box = el("span", "prompt__check" + (o.checked ? " is-checked" : ""));
-      const lab = el("span", "prompt__label"); lab.textContent = o.label;
+      const lab = el("span", "prompt__label prompt__text"); fillOptionLabel(lab, o.label);
       row.append(box, lab);
       row.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus on the card
       row.addEventListener("click", () => toggleRow(card, i));
       return row;
     }
     const b = el("button", "prompt__option" + current); b.type = "button"; b.tabIndex = -1;
-    b.dataset.i = String(i); b.textContent = o.label;
+    b.dataset.i = String(i);
+    const text = el("span", "prompt__text"); fillOptionLabel(text, o.label); b.appendChild(text);
     b.addEventListener("mousedown", (e) => e.preventDefault());
     b.addEventListener("click", () => { answerCard(card, card.querySelector(".prompt__options"), i); vscode.postMessage({ type: "selectOption", index: i }); });
     return b;
@@ -468,12 +488,15 @@
         if (document.body.dataset.view !== "chat") setView("list");
       } else {
         setView("gate");
-        // After a refresh that still couldn't confirm sign-in, say so plainly and
-        // offer an escape hatch (the disk check can miss a valid sign-in).
+        // The sign-in check is a best-effort disk probe: newer CLIs keep the
+        // token in the OS keychain, and a sign-in done in the terminal also
+        // leaves no file we can see — so a valid session can read as "signed
+        // out" (#3, #5). Always offer "Continue anyway" (not just after a
+        // recheck) so those users are never trapped at the gate.
         $("gate-message").textContent = wasRecheck
-          ? "Still signed out. Finish signing in in the terminal, then refresh — or continue anyway."
-          : (s.message || "Sign in with your Google account to start using Antigravity.");
-        $("gate-skip").hidden = !wasRecheck;
+          ? "Still couldn't confirm sign-in. If you signed in elsewhere (terminal or another device), continue anyway."
+          : (s.message || "Sign in with your Google account — or, if you're already signed in via the terminal, continue anyway.");
+        $("gate-skip").hidden = false;
       }
     } else if (document.body.dataset.view !== "chat") {
       setView("list");
@@ -618,7 +641,31 @@
     }
     $("gate-action").disabled = false;
   }
-  $("gate-action").addEventListener("click", () => vscode.postMessage({ type: "login" }));
+
+  // --- Sign-in flow (#7): OAuth URL + code controls in the gate card --------
+  const gateUrlRow = $("gate-url-row");
+  const gateCodeRow = $("gate-code-row");
+  const gateCode = /** @type {HTMLInputElement} */ ($("gate-code"));
+  const gateCodeSubmit = $("gate-code-submit");
+  function hideLoginControls() {
+    gateUrlRow.hidden = true; gateCodeRow.hidden = true;
+    gateCode.value = ""; gateCodeSubmit.classList.remove("is-active");
+  }
+  function submitLoginCode() {
+    const code = gateCode.value.trim(); if (!code) return;
+    vscode.postMessage({ type: "loginSubmitCode", code });
+    gateCode.value = ""; gateCodeSubmit.classList.remove("is-active");
+  }
+  $("gate-action").addEventListener("click", () => {
+    $("gate-action").disabled = true; hideLoginControls();
+    vscode.postMessage({ type: "login" });
+  });
+  $("gate-copy").addEventListener("click", () => vscode.postMessage({ type: "loginCopyUrl" }));
+  $("gate-open").addEventListener("click", () => vscode.postMessage({ type: "loginOpenUrl" }));
+  $("gate-code-submit").addEventListener("click", submitLoginCode);
+  gateCode.addEventListener("input", () => gateCodeSubmit.classList.toggle("is-active", gateCode.value.trim() !== ""));
+  gateCode.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitLoginCode(); } });
+
   $("gate-refresh").addEventListener("click", (e) => recheck(e.currentTarget));
   $("notfound-refresh").addEventListener("click", (e) => recheck(e.currentTarget));
   $("gate-skip").addEventListener("click", () => {
@@ -692,6 +739,8 @@
       case "promptEnd": clearPrompt(); break;
       case "cliInput": reflectInput(msg.text); break;
       case "working": setWorking(msg.value); break;
+      case "loginUrl": gateUrlRow.hidden = false; gateCodeRow.hidden = false; break;
+      case "loginError": hideLoginControls(); $("gate-action").disabled = false; $("gate-message").textContent = msg.message; break;
       case "system":
         if (msg.text === "__open_slash__") { input.value = "/"; input.focus(); maybeShowSlash(); }
         else addMessage("system", renderMarkdown(msg.text));

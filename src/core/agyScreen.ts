@@ -148,6 +148,17 @@ const caretMidLine = new RegExp(`${CARET_CLASS}\\s+\\S`);
 const isCaretRow = (t: string): boolean => caretAtStart.test(t);
 // An unselected vertical option row: the TUI pads it with leading spaces.
 const isIndentRow = (raw: string): boolean => /^ {2,}\S/.test(raw);
+// A group separator the TUI draws inside a longer picker, e.g. the `/resume`
+// browser's "── other workspaces ──────────" row: mostly box-drawing/dash glyphs
+// with at most a short label in the middle. It is decoration, never a selectable
+// option, so the option walk skips it (otherwise it renders as a dead button).
+// Verified against agy v1.0.4 `/resume`. The `>= 6` dash floor keeps real options
+// that merely contain a hyphen or two ("always-proceed", "request-review") safe.
+const isDivider = (t: string): boolean => {
+  const dashes = (t.match(/[─—–_-]/g) ?? []).length;
+  const solid = t.replace(/\s/g, "").length;
+  return solid > 0 && dashes >= 6 && dashes >= solid * 0.5;
+};
 
 /** Strips the caret / indent / numbering prefix off a raw option row. */
 function bareOption(raw: string): string {
@@ -217,7 +228,7 @@ function headingAbove(lines: string[], firstOptionIdx: number): { title: string;
       continue;
     }
     if (
-      isRule(t) || isBanner(t) || isStatus(t) || isSpinner(t) || isUserEcho(t) ||
+      isRule(t) || isDivider(t) || isBanner(t) || isStatus(t) || isSpinner(t) || isUserEcho(t) ||
       isToolCall(t) || isToolOut(t) || isEmptyPrompt(t) || isSelectFooter(t) || isNoise(t)
     ) {
       break;
@@ -281,8 +292,12 @@ function locateSelector(lines: string[]): Located | undefined {
   const rows: { raw: string; selected: boolean; idx: number }[] = [];
   for (let j = i; j >= 0; j--) {
     const raw = lines[j].replace(/\s+$/, "");
-    if (raw.trim() === "") {
-      break;
+    const tr = raw.trim();
+    if (tr === "" || isRule(tr)) {
+      break; // a blank line or full rule bounds the option block
+    }
+    if (isDivider(tr)) {
+      continue; // a group separator (e.g. "── other workspaces ──") is not an option
     }
     const caret = isCaretRow(raw);
     if (caret || isIndentRow(raw)) {
@@ -392,6 +407,7 @@ export function interpretScreen(rawLines: string[]): ScreenView {
   // line still reads "esc to cancel"). We also parse turns only from the region
   // *above* it, so its caret row `> Foo` isn't mistaken for a user echo.
   const selector = locateSelector(lines);
+  const inputBox = findInputBox(lines);
 
   let state: AgyState;
   if (/not signed in|Signing in/i.test(joined)) {
@@ -403,13 +419,18 @@ export function interpretScreen(rawLines: string[]): ScreenView {
     // input / wedge the turn (a `npm run dev` task runs indefinitely). It's a
     // separate non-blocking `working` flag below.
     state = "generating";
-  } else if (lines.some((l) => l.includes("? for shortcuts"))) {
+  } else if (lines.some((l) => l.includes("? for shortcuts")) || inputBox) {
+    // "Ready for input" idle. We accept EITHER the status-line hint OR the
+    // structural presence of the pinned input box (a `>` flanked by two rules).
+    // The status wording can change between CLI versions ("? for shortcuts"),
+    // and relying on it alone made the extension miss readiness and wrongly
+    // report "session ended before it was ready" (#5). The input box is a far
+    // more stable signal — if it's painted, the CLI is waiting for a prompt.
     state = "idle";
   } else {
     state = "starting";
   }
 
-  const inputBox = findInputBox(lines);
   const bodyTop = selector ? selector.top : lines.length;
   const turns: Turn[] = [];
   let cur: Turn | undefined;
@@ -483,8 +504,77 @@ export function replyFor(view: ScreenView, input: string): string {
   for (const turn of view.turns) {
     const nu = norm(turn.user);
     if (nu !== "" && (nu === ni || ni.startsWith(nu))) {
-      reply = turn.assistant;
+      reply = stripEchoedTail(turn.assistant, input, turn.user);
     }
   }
   return reply;
+}
+
+/**
+ * Removes the wrapped tail of the user's own prompt when it leaked into the
+ * assistant text. Verified against the real CLI: agy echoes a long prompt as
+ * `> <first row>` followed by continuation rows that it indents *exactly* like
+ * assistant prose (no `>`), so the turn parser cannot tell them apart and
+ * attributes the wrapped remainder to the reply — the chat would then show the
+ * end of your own message as the start of agy's answer. Here we DO know the
+ * prompt (`input`), so we drop the leading assistant lines that reconstruct the
+ * part of the prompt beyond the echoed first row. Word-wrap breaks at spaces,
+ * so joining the leaked rows with a space rebuilds the original tail exactly.
+ */
+function stripEchoedTail(assistant: string, input: string, echoedFirstRow: string): string {
+  const nEcho = norm(echoedFirstRow);
+  const nInput = norm(input);
+  // No wrap (the echo is the whole prompt) or the echo isn't a clean prefix of
+  // the prompt (nothing we can safely line up) ⇒ leave the reply untouched.
+  if (nEcho === "" || nEcho === nInput || !nInput.startsWith(nEcho)) {
+    return assistant;
+  }
+  const remainder = nInput.slice(nEcho.length).trim(); // the prompt's wrapped tail
+  if (remainder === "") {
+    return assistant;
+  }
+  const lines = assistant.split("\n");
+  let acc = "";
+  let cut = 0;
+  for (let i = 0; i < lines.length; i++) {
+    acc = norm(`${acc} ${lines[i]}`);
+    if (acc === remainder) {
+      cut = i + 1; // consumed exactly the leaked wrapped tail — strip these rows
+      break;
+    }
+    if (!remainder.startsWith(acc)) {
+      break; // diverged ⇒ this really is the reply, not the echoed prompt; keep all
+    }
+  }
+  return lines.slice(cut).join("\n").replace(/^\n+/, "");
+}
+
+/**
+ * Reconstructs the OAuth sign-in URL from the CLI's first-run login screen.
+ * The TUI is a full-screen, cursor-positioned repaint (like the rest of `agy`'s
+ * output — see the module header) rather than a plain character stream, so a
+ * URL too long for one row is broken by the TUI itself onto further rows,
+ * *not* the terminal's own soft-wrap: verified against a captured login
+ * screen, none of whose rows report as wrapped even though a 300+ char URL
+ * clearly spans several of them, breaking mid-word with no inserted space
+ * (".apps.g" / "oogleusercontent.com"). So this reassembles by structure — the
+ * `http…` row plus every following row up to whichever structural boundary
+ * ends the block first: a blank line, or one of the TUI's own horizontal
+ * rules (`isRule`, e.g. the rule under the pinned box the URL sits above) —
+ * rather than by regex-matching a single line.
+ */
+export function findUrl(lines: string[]): string | undefined {
+  const start = lines.findIndex((l) => /https?:\/\//.test(l));
+  if (start < 0) {
+    return undefined;
+  }
+  let url = lines[start].slice(lines[start].indexOf("http")).trim();
+  for (let i = start + 1; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t === "" || isRule(t)) {
+      break;
+    }
+    url += t;
+  }
+  return url;
 }

@@ -1,6 +1,6 @@
 import * as assert from "node:assert";
 
-import { interpretScreen, moveKeys, replyFor, selectionKeys } from "../../src/core/agyScreen";
+import { findUrl, interpretScreen, moveKeys, replyFor, selectionKeys } from "../../src/core/agyScreen";
 
 /*
  * These frames are the *rendered screens* produced by feeding real `agy` v1.0.4
@@ -407,6 +407,28 @@ describe("agyScreen.interpretScreen — state", () => {
   it("detects the signed-out state", () => {
     assert.strictEqual(interpretScreen(SIGNIN).state, "signin");
   });
+  it("treats the pinned input box as idle even if the status wording changed (#5)", () => {
+    // Same ready screen but with a reworded/absent status line — the CLI is still
+    // waiting for input (the `>` box is painted), so we must NOT read "starting"
+    // (which drives the false "session ended before it was ready" message).
+    const readyNoStatusHint = [
+      "      ▄▀▀▄        Antigravity CLI 9.9.9",
+      "  ▄▀▀      ▀▀▄",
+      "────────────────────────────────────────────────────────────",
+      "> hello there",
+      "",
+      "  Hi! How can I help?",
+      "────────────────────────────────────────────────────────────",
+      ">",
+      "────────────────────────────────────────────────────────────",
+      "press ? for help                                            SomeModel"
+    ];
+    assert.strictEqual(interpretScreen(readyNoStatusHint).state, "idle");
+  });
+  it("still reports 'starting' before the input box is painted", () => {
+    const booting = ["      ▄▀▀▄        Antigravity CLI 1.0.4", "     ▀▀▀▀▀▀       loading…"];
+    assert.strictEqual(interpretScreen(booting).state, "starting");
+  });
   it("flags working for a braille spinner and a /tasks hint (the latter non-blocking)", () => {
     const f = (x: string[]) => ["────────", "> hi", "────────"].concat(x);
     const spin = interpretScreen(f(["⣷ Working...", "? for shortcuts"]));
@@ -484,5 +506,138 @@ describe("agyScreen.replyFor", () => {
   it("returns '' when the prompt has no echoed turn yet", () => {
     const view = interpretScreen(GENERATING);
     assert.strictEqual(replyFor(view, "a different prompt"), "");
+  });
+
+  // Captured from real agy v1.0.4: a long prompt is echoed as `> <row1>` then an
+  // indented continuation with no `>`, which the TUI indents exactly like the
+  // reply — so the wrapped tail leaks into the assistant text. replyFor knows the
+  // real prompt and must strip it. (#reply-leak, found during the format streak)
+  const WRAPPED_PROMPT = [
+    "      ▄▀▀▄        Antigravity CLI 1.0.4",
+    "  ▄▀▀      ▀▀▄",
+    "────────────────────────────────────────────────────────────",
+    "> Reply in text only, no tools. Give a markdown bulleted list of exactly 3 items about terminals; each item starts with",
+    "  a **bold term** then a dash and a short clause.",
+    "▸ Thought for 3s, 486 tokens",
+    "  Defining Terminal Aspects",
+    "  • Terminal Emulator - it displays text output and accepts keyboard input.",
+    "  • Shell - it interprets text commands and executes programs.",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────",
+    ">",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "? for shortcuts                                                            Gemini 3.5 Flash (Medium)"
+  ];
+  const WRAPPED_INPUT =
+    "Reply in text only, no tools. Give a markdown bulleted list of exactly 3 items about terminals; " +
+    "each item starts with a **bold term** then a dash and a short clause.";
+
+  it("strips the wrapped tail of the prompt that leaked into the reply", () => {
+    const view = interpretScreen(WRAPPED_PROMPT);
+    const reply = replyFor(view, WRAPPED_INPUT);
+    assert.ok(reply.startsWith("Defining Terminal Aspects"), `got: ${reply}`);
+    assert.ok(!reply.includes("a **bold term** then a dash"), "prompt tail must not leak into reply");
+    assert.ok(reply.includes("Terminal Emulator"));
+  });
+
+  it("leaves an unwrapped prompt's reply untouched", () => {
+    const view = interpretScreen(TWO_TURNS);
+    assert.strictEqual(replyFor(view, "reply with exactly: ONEONE"), "ONEONE");
+  });
+});
+
+describe("agyScreen selector separators (#resume-divider)", () => {
+  // Modeled on the real agy v1.0.4 `/resume` browser: a vertical picker whose
+  // list is split by a "── other workspaces ──" divider. That separator must
+  // never become a selectable option (it would render as a dead button).
+  const RESUME_LIKE = [
+    "      ▄▀▀▄        Antigravity CLI 1.0.4",
+    "  ▄▀▀      ▀▀▄",
+    "────────────────────────────────────────────────────────────",
+    ">",
+    "────────────────────────────────────────────────────────────",
+    "  Conversations",
+    "> Defining Terminal Components                                     10 steps    3m ago",
+    "  Reply with plain text only                                        4 steps   10m ago",
+    "  [CURRENT] dbc992b0-1814                                           0 steps",
+    "  ── other workspaces ────────────────────────────────────────────────────────────────",
+    "  hi                                              8 steps   46m ago   workspace",
+    "Keyboard: ↑/↓ Navigate  enter Select  esc Go Back",
+    "esc to cancel                                                      Gemini 3.5 Flash (Medium)"
+  ];
+
+  it("does not emit the divider row as an option", () => {
+    const view = interpretScreen(RESUME_LIKE);
+    assert.strictEqual(view.state, "prompt");
+    const labels = view.prompt!.options.map((o) => o.label);
+    assert.ok(!labels.some((l) => /other workspaces/i.test(l)), `divider leaked: ${JSON.stringify(labels)}`);
+    assert.ok(!labels.some((l) => /^[─—–_-]+$/.test(l)), "no all-dash option");
+    // The five real rows survive (Conversations, two convs, [CURRENT], hi).
+    assert.strictEqual(view.prompt!.options.length, 5);
+  });
+
+  it("keeps the caret on the right row across the divider", () => {
+    const view = interpretScreen(RESUME_LIKE);
+    assert.strictEqual(view.prompt!.options[view.prompt!.selectedIndex].label.split("  ")[0], "Defining Terminal Components");
+  });
+
+  it("does not treat a real option with a hyphen or two as a divider", () => {
+    const view = interpretScreen([
+      "> hi",
+      "",
+      "Choose a permission mode",
+      "> request-review    (current)  Prompt for write, bash, and web tools",
+      "  always-proceed    Auto-approve all tools",
+      "↑/↓ Navigate  enter Select  esc Go Back",
+      "esc to cancel"
+    ]);
+    assert.strictEqual(view.state, "prompt");
+    assert.strictEqual(view.prompt!.options.length, 2);
+    assert.ok(/request-review/.test(view.prompt!.options[0].label));
+  });
+});
+
+describe("agyScreen.findUrl", () => {
+  // Transcribed from a real agy v1.0.4 login screen: the TUI cursor-positions
+  // each row itself rather than relying on terminal soft-wrap (none of these
+  // rows report as xterm-wrapped), breaking mid-word with no inserted space.
+  const OAUTH_SCREEN = [
+    "Your browser should open automatically. If not:",
+    "",
+    "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.g",
+    "oogleusercontent.com&code_challenge=PAd6nNw8PE-vMmsTICemEbWwbp8WORhRGL1wJl1iv0g&code_challenge_method=S256&prompt=consent&red",
+    "irect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%",
+    "2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.",
+    "profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+openi",
+    "d&state=nXqBEW1tFy04nOLFcSqJKg",
+    "",
+    "Copy and paste the URL or click on the link below:"
+  ];
+
+  it("reassembles a URL the TUI breaks mid-word across several unindented rows", () => {
+    assert.strictEqual(
+      findUrl(OAUTH_SCREEN),
+      "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_challenge=PAd6nNw8PE-vMmsTICemEbWwbp8WORhRGL1wJl1iv0g&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+openid&state=nXqBEW1tFy04nOLFcSqJKg"
+    );
+  });
+
+  it("stops at the blank line ending the URL block", () => {
+    const url = findUrl(OAUTH_SCREEN);
+    assert.ok(!url?.includes("Copy and paste"));
+  });
+
+  it("keeps collecting through a continuation row that happens to look indented", () => {
+    // Only the blank line ends the block — a row starting with whitespace must
+    // not be mistaken for prose and cut the URL short.
+    const screen = ["https://example.com/a", " b=1&c=2", "", "next paragraph"];
+    assert.strictEqual(findUrl(screen), "https://example.com/ab=1&c=2");
+  });
+
+  it("stops at a horizontal rule even with no blank line first", () => {
+    const screen = ["https://example.com/a", "b=1&c=2", "──────────────────────", "> authorization code..."];
+    assert.strictEqual(findUrl(screen), "https://example.com/ab=1&c=2");
+  });
+
+  it("returns undefined when there is no URL", () => {
+    assert.strictEqual(findUrl(["Choose your color scheme:", "> terminal"]), undefined);
   });
 });

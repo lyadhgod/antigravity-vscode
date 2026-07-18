@@ -65,7 +65,11 @@ export type HostToWebview =
   /** The CLI's `>` input box changed — mirror it into the chat box (2-way, #9). */
   | { type: "cliInput"; text: string }
   /** A spinner / `/tasks` background task is (in)active — show a non-blocking loader. */
-  | { type: "working"; value: boolean };
+  | { type: "working"; value: boolean }
+  /** The sign-in flow reached the OAuth URL/code screen — show the gate's URL + code controls. */
+  | { type: "loginUrl"; url: string }
+  /** The sign-in flow was interrupted (the CLI process exited before reaching idle). */
+  | { type: "loginError"; message: string };
 
 /** Messages sent from the webview → extension host. */
 export type WebviewToHost =
@@ -91,4 +95,10 @@ export type WebviewToHost =
   /** Send free text to the CLI's current input (e.g. a "Write-in" answer, #5). */
   | { type: "sendText"; text: string }
   /** The user dismissed the selector (ESC / Cancel / Skip). */
-  | { type: "promptCancel" };
+  | { type: "promptCancel" }
+  /** The gate's sign-in code box was submitted — send it to the CLI + Enter. */
+  | { type: "loginSubmitCode"; code: string }
+  /** The gate's "Open Browser" button for the sign-in URL. */
+  | { type: "loginOpenUrl" }
+  /** The gate's clipboard-copy button for the sign-in URL. */
+  | { type: "loginCopyUrl" };

@@ -21,13 +21,43 @@
  * Lifecycle coupling (see [ui/chatViewProvider.ts]): deleting a session disposes
  * its process; the process exiting tells the view to drop the session.
  */
-import { ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import { Terminal } from "@xterm/headless";
 
 import { buildSessionArgs } from "../core/argBuilder";
 import { ScreenView, interpretScreen, moveKeys, selectionKeys } from "../core/agyScreen";
+import { missingPtyBackendMessage, planLaunch } from "../core/ptyLauncher";
 import { AntigravityConfig } from "../core/types";
+
+/** Minimal shape of the optional native `node-pty` backend used on Windows (#1, #2). */
+interface IPtyLike {
+  onData(cb: (data: string) => void): void;
+  onExit(cb: (e: { exitCode: number }) => void): void;
+  write(data: string): void;
+  kill(signal?: string): void;
+}
+interface NodePtyModule {
+  spawn(
+    file: string,
+    args: string[],
+    opts: { name?: string; cols: number; rows: number; cwd?: string; env?: NodeJS.ProcessEnv }
+  ): IPtyLike;
+}
+
+/**
+ * Lazily loads the optional native `node-pty` backend (Windows ConPTY). It is
+ * NOT a hard dependency, so absence returns `undefined` rather than throwing —
+ * Unix never reaches here (it uses the `script` shim). `node-pty` is marked
+ * external in esbuild so this stays a runtime require, not a bundled module.
+ */
+function loadNodePty(): NodePtyModule | undefined {
+  try {
+    return require("node-pty") as NodePtyModule;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Vertical/horizontal selector orientation (see core/agyScreen.SelectPrompt). */
 type Layout = "vertical" | "horizontal";
@@ -62,14 +92,23 @@ export interface SessionLaunchOptions {
 
 /** Callbacks the chat view supplies to observe one interactive session. */
 export interface InteractiveObserver {
-  /** Fired (debounced) whenever the reconstructed screen changes. */
-  onScreen(view: ScreenView): void;
-  /** Fired once when the `agy` process exits (for any reason). */
-  onExit(code: number | null): void;
+  /**
+   * Fired (debounced) whenever the reconstructed screen changes. `lines` is the
+   * raw rendered screen `view` was built from — needed to read a value the TUI
+   * breaks across several rows itself (e.g. the sign-in flow's OAuth URL; see
+   * `core/agyScreen.findUrl`), which `view`'s parsed turns/prompt don't carry.
+   */
+  onScreen(view: ScreenView, lines: string[]): void;
+  /**
+   * Fired once when the `agy` process exits (for any reason). `error`, when
+   * present, is a specific human-facing reason the session could not run at all
+   * — e.g. native Windows without a ConPTY backend (#1, #2) — so the caller can
+   * show it instead of the generic "ended before ready" message.
+   */
+  onExit(code: number | null, error?: string): void;
 }
 
 interface Live {
-  proc: ChildProcess;
   term: Terminal;
   observer: InteractiveObserver;
   /** Raw output kept verbatim so a freshly attached terminal can replay it. */
@@ -81,6 +120,10 @@ interface Live {
   ready: boolean;
   /** Prompts requested before the agent was ready, flushed on first idle. */
   queue: string[];
+  /** Backend-agnostic input write (`script` stdin or the node-pty ConPTY). */
+  write: (data: string) => void;
+  /** Backend-agnostic force-terminate (reaps `script`+`agy`, or kills the ConPTY). */
+  terminate: () => void;
 }
 
 export class InteractiveSessionService {
@@ -102,7 +145,8 @@ export class InteractiveSessionService {
     if (existing) {
       existing.observer = observer;
       if (existing.lastSerialized) {
-        observer.onScreen(interpretScreen(existing.lastSerialized.split("\n")));
+        const lines = existing.lastSerialized.split("\n");
+        observer.onScreen(interpretScreen(lines), lines);
       }
       return;
     }
@@ -115,24 +159,20 @@ export class InteractiveSessionService {
       { addDirs, sandbox: options.sandbox, skipPermissions: options.skipPermissions },
       config
     );
-
-    // Build `stty <size>; exec agy …` and hand it to `script` as a single -c arg.
-    const sh = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
-    const inner =
-      `stty rows ${PTY_ROWS} cols ${PTY_COLS} 2>/dev/null; exec ` +
-      [agy, ...argv].map(sh).join(" ");
-
-    const proc = spawn("script", ["-q", "-e", "-c", inner, "/dev/null"], {
-      cwd: dirs[0],
-      env: { ...process.env, TERM: "xterm-256color" }
-    });
+    // The launch plan is platform-specific: `script` (macOS/Linux) vs. a
+    // node-pty ConPTY (Windows). The pure decision + argv live in core/ptyLauncher.
+    const plan = planLaunch(process.platform, agy, argv, { cols: PTY_COLS, rows: PTY_ROWS });
+    const env = { ...process.env, TERM: "xterm-256color" };
 
     const term = new Terminal({ cols: PTY_COLS, rows: PTY_ROWS, scrollback: 5000, allowProposedApi: true });
-    const entry: Live = { proc, term, observer, raw: "", lastSerialized: "", ready: false, queue: [] };
-    this.live.set(id, entry);
+    const entry: Live = {
+      term, observer, raw: "", lastSerialized: "", ready: false, queue: [],
+      write: () => {}, terminate: () => {} // replaced once the backend is spawned
+    };
 
-    const onData = (buf: Buffer): void => {
-      const text = buf.toString("utf8");
+    // Shared by both backends: fold raw output into the mirror + emulator +
+    // debounced parse. Bytes arrive as a Buffer (`script`) or string (node-pty).
+    const feed = (text: string): void => {
       entry.raw += text;
       if (entry.raw.length > RAW_CAP) {
         entry.raw = entry.raw.slice(-RAW_CAP);
@@ -141,8 +181,47 @@ export class InteractiveSessionService {
       term.write(text);
       this.scheduleRender(id);
     };
-    proc.stdout?.on("data", onData);
-    proc.stderr?.on("data", onData);
+
+    if (plan.kind === "conpty") {
+      const nodePty = loadNodePty();
+      if (!nodePty) {
+        // Native Windows with no ConPTY backend: do NOT spawn `script` (it would
+        // ENOENT and masquerade as "agy isn't installed"). Report the real cause
+        // and the WSL fallback (#1, #2). Deferred so start() returns first.
+        setTimeout(() => observer.onExit(null, missingPtyBackendMessage()), 0);
+        return;
+      }
+      const p = nodePty.spawn(plan.command, plan.args, {
+        name: "xterm-256color", cols: plan.cols, rows: plan.rows, cwd: dirs[0], env
+      });
+      entry.write = (data) => {
+        try { p.write(data); } catch { /* pty gone */ }
+      };
+      entry.terminate = () => {
+        try { p.kill(); } catch { /* already gone */ }
+      };
+      this.live.set(id, entry);
+      p.onData((data) => feed(data));
+      p.onExit(({ exitCode }) => this.handleExit(id, exitCode));
+      return;
+    }
+
+    const proc = spawn(plan.command, plan.args, { cwd: dirs[0], env });
+    entry.write = (data) => {
+      try { proc.stdin?.write(data); } catch { /* stdin gone */ }
+    };
+    entry.terminate = () => {
+      try {
+        // The `script` wrapper blocks on a Ctrl+Z'd child and ignores SIGTERM,
+        // so resume it (SIGCONT) and force-terminate (SIGKILL); this reaps both
+        // `script` and `agy` with no orphans (verified against the real CLI).
+        proc.kill("SIGCONT");
+        proc.kill("SIGKILL");
+      } catch { /* already gone */ }
+    };
+    this.live.set(id, entry);
+    proc.stdout?.on("data", (buf: Buffer) => feed(buf.toString("utf8")));
+    proc.stderr?.on("data", (buf: Buffer) => feed(buf.toString("utf8")));
     proc.on("exit", (code) => this.handleExit(id, code));
     proc.on("error", () => this.handleExit(id, null));
   }
@@ -158,13 +237,13 @@ export class InteractiveSessionService {
       entry.queue.push(line);
       return;
     }
-    entry.proc.stdin?.write(line + "\r");
+    entry.write(line + "\r");
   }
 
   /** Sends a control key, e.g. ESC to cancel a generating turn or dismiss a selector. */
   sendKey(id: string, key: "escape" | "interrupt"): void {
     const seq = key === "escape" ? "\x1b" : "\x03";
-    this.live.get(id)?.proc.stdin?.write(seq);
+    this.live.get(id)?.write(seq);
   }
 
   /**
@@ -194,12 +273,12 @@ export class InteractiveSessionService {
   }
 
   private write(id: string, data: string): void {
-    this.live.get(id)?.proc.stdin?.write(data);
+    this.live.get(id)?.write(data);
   }
 
   /** Forwards raw keystrokes typed into the mirror terminal. */
   writeRaw(id: string, data: string): void {
-    this.live.get(id)?.proc.stdin?.write(data);
+    this.live.get(id)?.write(data);
   }
 
   /** Attaches a mirror sink (the visible terminal); returns the replay buffer. */
@@ -250,31 +329,21 @@ export class InteractiveSessionService {
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
-    const { proc } = entry;
     try {
-      proc.stdin?.write("\x1a"); // Ctrl+Z — end the session from the CLI's view
+      entry.write("\x1a"); // Ctrl+Z — end the session from the CLI's view
     } catch {
-      /* stdin already gone */
+      /* input already gone */
     }
-    const terminate = (): void => {
-      try {
-        // The `script` wrapper blocks on a Ctrl+Z'd child and ignores SIGTERM,
-        // so resume it (SIGCONT) and force-terminate (SIGKILL); this reaps both
-        // `script` and `agy` with no orphans (verified against the real CLI).
-        proc.kill("SIGCONT");
-        proc.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    };
+    // The force-terminate is backend-specific (SIGCONT+SIGKILL for the `script`
+    // wrapper; a plain kill for the ConPTY) — see the closures set in start().
     if (graceful) {
-      setTimeout(terminate, SHUTDOWN_GRACE_MS);
+      setTimeout(entry.terminate, SHUTDOWN_GRACE_MS);
     } else {
-      terminate();
+      entry.terminate();
     }
   }
 
-  private handleExit(id: string, code: number | null): void {
+  private handleExit(id: string, code: number | null, error?: string): void {
     const entry = this.live.get(id);
     if (!entry) {
       return;
@@ -283,7 +352,7 @@ export class InteractiveSessionService {
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
-    entry.observer.onExit(code);
+    entry.observer.onExit(code, error);
   }
 
   private scheduleRender(id: string): void {
@@ -319,9 +388,9 @@ export class InteractiveSessionService {
       entry.ready = true;
       const queued = entry.queue.splice(0);
       for (const line of queued) {
-        entry.proc.stdin?.write(line + "\r");
+        entry.write(line + "\r");
       }
     }
-    entry.observer.onScreen(view);
+    entry.observer.onScreen(view, lines);
   }
 }

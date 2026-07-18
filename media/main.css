@@ -101,6 +101,17 @@ body[data-view="chat"] .app-bar .app-bar__back {
 .gate__link { color: var(--ag-primary); text-decoration: none; font-weight: 600; }
 .gate__link:hover { text-decoration: underline; }
 
+/* Sign-in flow (#7): the OAuth URL row (copy + open-link) and the code-entry
+   row (which reuses .writein/.writein__input verbatim). The extra .btn--text
+   class in the selector out-specifies the plain .btn--text rule (display:
+   block) so these stay inline-flex and their icon stays vertically centered
+   with the label regardless of rule order. */
+.gate__row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
+.btn--text.gate__open { display: inline-flex; align-items: center; gap: 6px; width: auto; margin-top: 0; }
+#gate-code-row { margin-top: 10px; }
+/* The code box's submit button turns primary-colored once there's text to send (#4). */
+#gate-code-submit.is-active { background: var(--ag-primary); color: var(--ag-on-primary); }
+
 /* --- Sessions list (step 1, #5) ------------------------------------------- */
 .list { flex: 1 1 auto; flex-direction: column; overflow-y: auto; padding: 14px; gap: 10px; }
 /* New Session row: an options dropdown to the left of the New Session button. */
@@ -268,6 +279,18 @@ body[data-view="chat"] .app-bar .app-bar__back {
 /* The choice the user just clicked — fills in before the card clears. */
 .prompt__option--picked { background: var(--ag-primary); color: var(--ag-on-primary); border-color: var(--ag-primary); }
 .prompt__option--picked::after { opacity: 0; }
+/* An option label parsed into a bold name, an optional "current" pill, and the
+   muted secondary description the live TUI packs onto the same row — seen on
+   /model, /permissions, /hooks (found during the output-format streak). */
+.prompt__text { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; }
+.prompt__name { font-weight: 600; }
+.prompt__badge {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 7px; border-radius: var(--ag-shape-full);
+  background: var(--ag-primary); color: var(--ag-on-primary);
+}
+.prompt__desc { flex-basis: 100%; font-weight: 400; font-size: 12px; color: var(--ag-on-surface-variant); }
+.prompt__option--check .prompt__text { flex: 1 1 auto; }
 .prompt__cancel {
   cursor: pointer; font: inherit; font-weight: 500; font-size: 12px;
   color: var(--ag-on-surface-variant); background: transparent; border: none;

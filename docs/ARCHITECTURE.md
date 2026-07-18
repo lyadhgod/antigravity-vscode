@@ -20,8 +20,9 @@ contains no model logic, credentials, or network calls of its own.
 │  agyScreen · argBuilder · binaryResolver · onboarding · slashCommands   │
 │  sessionStore · processRunner · types                                   │
 └─────────────────────────────────────────────────────────────────────────┘
-        │ spawns `script -c "stty …; exec agy"`        ▲ raw PTY bytes
-        ▼                                              │ (→ @xterm/headless)
+        │ spawns via core/ptyLauncher:                 ▲ raw PTY bytes
+        │   Unix → `script -c "stty …; exec agy"`      │ (→ @xterm/headless)
+        ▼   Windows → node-pty ConPTY                  │
                               agy  (interactive TUI)
 ```
 
@@ -56,6 +57,12 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
   frames captured from the real CLI.
 - **`binaryResolver`** — resolves `agy` from an explicit path, then `PATH`
   (honoring Windows `PATHEXT`), then the installer's well‑known locations.
+- **`ptyLauncher`** — decides how to put `agy` on a real PTY per platform: the
+  `script`/`stty` shim on macOS/Linux, a `node-pty` ConPTY on Windows (#1, #2).
+  Pure (the argv + `stty` string are unit-tested); the spawn itself lives in the
+  service. `node-pty` is an optional runtime require (external in esbuild), so
+  when it's absent on Windows the session reports that plainly and points at WSL
+  instead of ENOENT-ing on the missing `script`.
 - **`argBuilder`** — builds exact argv for session/version/subcommands; we always
   spawn with an explicit argv (no shell).
 - **`onboarding`** — install → sign‑in → ready decisions, the OAuth token path,
@@ -75,8 +82,10 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
 ### `services/` — the VS Code bridge
 
 - **`InteractiveSessionService`** owns one interactive `agy` process per chat
-  session. It spawns `agy` under a `script` PTY shim (sizing the PTY via `stty`),
-  feeds the raw output through `@xterm/headless`, debounces, and emits an
+  session. It spawns `agy` on a real PTY via `core/ptyLauncher` (the `script`
+  shim on Unix, a `node-pty` ConPTY on Windows — behind a backend-agnostic
+  `write`/`terminate` pair), feeds the raw output through `@xterm/headless`,
+  debounces, and emits an
   interpreted `ScreenView` on each settled frame. It also queues input until the
   prompt is ready, takes per-session launch toggles (sandbox / skip-permissions),
   and exposes a raw mirror sink for the on-demand terminal. On dispose it ends a

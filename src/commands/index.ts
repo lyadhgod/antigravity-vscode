@@ -74,8 +74,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
   // --- Account ---------------------------------------------------------------
   on("antigravity.login", () => {
-    terminal.login();
-    void chat.refreshState();
+    chat.focus();
+    chat.startLogin();
   });
   on("antigravity.logout", () => {
     terminal.logout();

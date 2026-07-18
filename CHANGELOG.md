@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Cross-platform robustness and interactive-output fixes, grounded in probing the
+real `agy` TUI end-to-end.
+
+### Fixed
+
+- **Windows sign-in / lifecycle commands no longer fail on PowerShell (#2).**
+  Command lines sent to the integrated terminal are now quoted for the actual
+  shell — PowerShell gets the call operator (`& 'C:\…\agy.exe'`) so a quoted path
+  is executed instead of echoed as a string literal; cmd.exe gets double-quote
+  rules; POSIX is unchanged.
+- **The chat reply no longer starts with the tail of your own message (#reply-leak).**
+  A long prompt is word-wrapped by the TUI onto rows indented exactly like the
+  reply; the wrapped tail was leaking into the assistant text. It is now stripped.
+- **Selector separators are no longer shown as dead options.** A group divider
+  such as `/resume`'s "── other workspaces ──" is recognised and skipped.
+- **Fewer false "session ended before it was ready" errors (#5).** Readiness now
+  also accepts the structural pinned input box, not only the exact
+  "? for shortcuts" status wording, so a CLI version that rewords the status line
+  is still detected as ready. The sign-in gate no longer hard-blocks when the
+  on-disk token check misses a keychain-stored or terminal-established login
+  (#3, #5) — "Continue anyway" is always offered.
+- **Native Windows now reports the real cause instead of a misleading error
+  (#1, #2).** The interactive session is launched through a platform-aware plan:
+  the `script`/`stty` PTY shim on macOS/Linux (unchanged), and a `node-pty`
+  ConPTY on Windows. When the ConPTY backend isn't present, the user is told to
+  use WSL rather than seeing a bogus "agy isn't installed".
+
+### Changed
+
+- Option cards parse an inline `(current)` marker and secondary description
+  (seen on `/model`, `/permissions`, `/hooks`) into a bold name, a "current"
+  badge, and muted description text.
+
 ## [0.5.0] — 2026-06-03
 
 Fifth feedback round — chat-output layout and UI polish.

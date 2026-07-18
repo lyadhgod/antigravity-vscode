@@ -1,15 +1,15 @@
 /**
  * Owns the VS Code integrated terminal(s) used for the CLI lifecycle actions
- * that want a real, user-visible TTY: the Google sign-in flow, install/update,
- * changelog, and plugin management.
+ * that want a real, user-visible TTY: install/update, changelog, and plugin
+ * management.
  *
- * Chat is separate: each session drives its own interactive `agy` via
- * [services/interactiveSession.ts], mirrored into a terminal on demand. This
- * service handles the standalone command-palette actions.
+ * Chat — and the sign-in flow — are separate: each drives its own interactive
+ * `agy` via [services/interactiveSession.ts], mirrored into a terminal on
+ * demand. This service handles the standalone command-palette actions.
  */
 import * as vscode from "vscode";
 
-import { buildSessionArgs, buildSubcommandArgs, quoteCommand } from "../core/argBuilder";
+import { ShellKind, buildSessionArgs, buildSubcommandArgs, detectShellKind, quoteCommand } from "../core/argBuilder";
 import { SessionOptions } from "../core/types";
 import { CliService } from "./cliService";
 
@@ -22,6 +22,15 @@ export class TerminalService {
   private sessionActive = false;
 
   constructor(private readonly cli: CliService) {}
+
+  /**
+   * The shell our terminal will run — we create it with no explicit `shellPath`,
+   * so it uses the user's default (`vscode.env.shell`). We quote every command
+   * line for *that* shell so a Windows path is executed, not echoed (#2).
+   */
+  private shellKind(): ShellKind {
+    return detectShellKind(process.platform, vscode.env.shell);
+  }
 
   /** Returns the shared Antigravity terminal, creating it if needed. */
   private getTerminal(): vscode.Terminal {
@@ -41,7 +50,7 @@ export class TerminalService {
   startSession(options: SessionOptions = {}): void {
     const command = this.cli.resolveCommand();
     const args = buildSessionArgs(options, this.cli.getConfig());
-    this.run(quoteCommand(command, args));
+    this.run(quoteCommand(command, args, this.shellKind()));
     this.sessionActive = true;
   }
 
@@ -57,18 +66,6 @@ export class TerminalService {
       this.terminal.show(true);
     }
     this.getTerminal().sendText(line, true);
-  }
-
-  /**
-   * Triggers the Google sign-in flow. The CLI starts authentication on first
-   * run; on a desktop it opens the browser, on a remote/SSH host it prints an
-   * authorization URL plus a one-time code in this terminal.
-   */
-  login(): void {
-    this.startSession();
-    vscode.window.showInformationMessage(
-      "Antigravity sign-in started in the terminal. If a browser does not open, follow the printed URL and code, then reload."
-    );
   }
 
   /** Signs out via the TUI's `/logout` slash command. */
@@ -89,13 +86,13 @@ export class TerminalService {
   /** Runs a plugin management command, e.g. `plugin list`. */
   runPluginCommand(args: string[]): void {
     const command = this.cli.resolveCommand();
-    this.run(quoteCommand(command, ["plugin", ...args]));
+    this.run(quoteCommand(command, ["plugin", ...args], this.shellKind()));
   }
 
   /** Runs a bare subcommand (`update`, `changelog`). */
   private runSubcommand(sub: "update" | "changelog"): void {
     const command = this.cli.resolveCommand();
-    this.run(quoteCommand(command, buildSubcommandArgs(sub)));
+    this.run(quoteCommand(command, buildSubcommandArgs(sub), this.shellKind()));
     this.sessionActive = false; // a subcommand is not an interactive session
   }
 

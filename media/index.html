@@ -39,6 +39,23 @@
         <h2>Sign in to continue</h2>
         <p id="gate-message">Sign in with your Google account to start using Antigravity.</p>
         <button id="gate-action" class="btn" type="button">Sign in with Google</button>
+        <!-- Sign-in flow (#7): shown once the CLI prints the OAuth URL. -->
+        <div id="gate-url-row" class="gate__row" hidden>
+          <button id="gate-copy" class="btn btn--text gate__open" type="button">
+            Copy URL
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          </button>
+          <button id="gate-open" class="btn btn--text gate__open" type="button">
+            Open Link
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM19 19H5V5h7V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7z"/></svg>
+          </button>
+        </div>
+        <div id="gate-code-row" class="writein" hidden>
+          <input id="gate-code" class="writein__input" type="text" placeholder="Enter authorization code" aria-label="Authorization code" />
+          <button id="gate-code-submit" class="icon-btn" type="button" title="Submit code" aria-label="Submit code">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
+          </button>
+        </div>
         <button id="gate-refresh" class="btn btn--text" type="button">I've signed in — refresh</button>
         <button id="gate-skip" class="btn btn--text" type="button" hidden>Continue anyway →</button>
       </div>

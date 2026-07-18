@@ -3,7 +3,10 @@
 // VS Code loads a single CommonJS entry point (`dist/extension.js`). esbuild
 // bundles the whole `src/` graph into that file in milliseconds. `vscode` is
 // marked external because the editor injects it at runtime — it must never be
-// bundled. Node built-ins stay external too (platform "node").
+// bundled. Node built-ins stay external too (platform "node"). `node-pty` is
+// the OPTIONAL native ConPTY backend used on Windows (#1, #2); it is loaded via
+// a guarded runtime require, so it must stay external (never bundled) and is
+// simply absent on installs that don't ship it.
 const esbuild = require("esbuild");
 
 const production = process.argv.includes("--production");
@@ -17,7 +20,7 @@ async function main() {
     platform: "node",
     target: "node18",
     outfile: "dist/extension.js",
-    external: ["vscode"],
+    external: ["vscode", "node-pty"],
     sourcemap: !production,
     minify: production,
     logLevel: "info"

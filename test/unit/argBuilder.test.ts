@@ -4,6 +4,7 @@ import {
   buildSessionArgs,
   buildSubcommandArgs,
   buildVersionArgs,
+  detectShellKind,
   quoteCommand
 } from "../../src/core/argBuilder";
 import { AntigravityConfig } from "../../src/core/types";
@@ -80,8 +81,75 @@ describe("argBuilder misc", () => {
     assert.deepStrictEqual(buildSubcommandArgs("changelog"), ["changelog"]);
   });
 
-  it("quotes only arguments that need it and escapes single quotes", () => {
+  it("quotes only arguments that need it and escapes single quotes (POSIX default)", () => {
     assert.strictEqual(quoteCommand("agy", ["--print", "hello world", "safe"]), "agy --print 'hello world' safe");
     assert.strictEqual(quoteCommand("agy", ["it's"]), `agy 'it'\\''s'`);
+  });
+});
+
+describe("argBuilder.detectShellKind (#2)", () => {
+  it("is always POSIX off Windows regardless of shell path", () => {
+    assert.strictEqual(detectShellKind("darwin", "/bin/zsh"), "posix");
+    assert.strictEqual(detectShellKind("linux", "/usr/bin/bash"), "posix");
+    assert.strictEqual(detectShellKind("linux", undefined), "posix");
+  });
+
+  it("classifies Windows PowerShell (Windows PowerShell + pwsh)", () => {
+    assert.strictEqual(
+      detectShellKind("win32", "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+      "powershell"
+    );
+    assert.strictEqual(detectShellKind("win32", "C:\\Program Files\\PowerShell\\7\\pwsh.exe"), "powershell");
+  });
+
+  it("classifies cmd.exe", () => {
+    assert.strictEqual(detectShellKind("win32", "C:\\WINDOWS\\System32\\cmd.exe"), "cmd");
+  });
+
+  it("treats Git Bash / WSL / sh on Windows as POSIX", () => {
+    assert.strictEqual(detectShellKind("win32", "C:\\Program Files\\Git\\bin\\bash.exe"), "posix");
+    assert.strictEqual(detectShellKind("win32", "C:\\WINDOWS\\System32\\wsl.exe"), "posix");
+    assert.strictEqual(detectShellKind("win32", "C:\\msys64\\usr\\bin\\sh.exe"), "posix");
+  });
+
+  it("defaults an unknown Windows shell to PowerShell (VS Code's modern default)", () => {
+    assert.strictEqual(detectShellKind("win32", undefined), "powershell");
+    assert.strictEqual(detectShellKind("win32", "C:\\weird\\shell.exe"), "powershell");
+  });
+});
+
+describe("argBuilder.quoteCommand shells (#2)", () => {
+  const winPath = "C:\\Users\\me\\AppData\\Local\\Antigravity\\agy.exe";
+  const winPathSpace = "C:\\Program Files\\Antigravity\\agy.exe";
+
+  it("PowerShell prefixes the call operator so a quoted path is executed, not echoed", () => {
+    // The bug: without `&`, `'C:\…\agy.exe'` is a string literal PS just prints.
+    assert.strictEqual(
+      quoteCommand(winPath, ["update"], "powershell"),
+      "& 'C:\\Users\\me\\AppData\\Local\\Antigravity\\agy.exe' update"
+    );
+  });
+
+  it("PowerShell quotes a path with spaces and doubles embedded single quotes", () => {
+    assert.strictEqual(
+      quoteCommand(winPathSpace, ["plugin", "list"], "powershell"),
+      "& 'C:\\Program Files\\Antigravity\\agy.exe' plugin list"
+    );
+    assert.strictEqual(quoteCommand("agy", ["it's"], "powershell"), "& agy 'it''s'");
+  });
+
+  it("PowerShell keeps a bare command and simple flags unquoted (still prefixes &)", () => {
+    assert.strictEqual(quoteCommand("agy", ["--version"], "powershell"), "& agy --version");
+  });
+
+  it("cmd leaves a backslash path without spaces bare and double-quotes one with spaces", () => {
+    assert.strictEqual(
+      quoteCommand(winPath, ["update"], "cmd"),
+      "C:\\Users\\me\\AppData\\Local\\Antigravity\\agy.exe update"
+    );
+    assert.strictEqual(
+      quoteCommand(winPathSpace, ["update"], "cmd"),
+      '"C:\\Program Files\\Antigravity\\agy.exe" update'
+    );
   });
 });

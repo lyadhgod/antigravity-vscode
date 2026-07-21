@@ -94,6 +94,16 @@ export interface ScreenView {
   input?: string;
   /** A spinner or `/tasks` background task is active — show a (non-blocking) loader. */
   working?: boolean;
+  /**
+   * The CLI is ready to accept input — the pinned `>` box is painted. This is a
+   * STRUCTURAL signal, independent of `state`, used only to gate startup (release
+   * queued input; clear the "session ended before it was ready" guard, #5). It is
+   * deliberately NOT tied to `state === "idle"`: idle (turn-done) still requires
+   * the "? for shortcuts" status line, so a mid-generation frame that momentarily
+   * lacks "esc to cancel" can't be mistaken for a finished turn and finalize it
+   * early (which truncated replies / desynced later turns).
+   */
+  ready?: boolean;
 }
 
 // Braille block — the spinner glyphs ⣾⣷⣯⣟⡿⢿⣻⣽ live here.
@@ -419,13 +429,12 @@ export function interpretScreen(rawLines: string[]): ScreenView {
     // input / wedge the turn (a `npm run dev` task runs indefinitely). It's a
     // separate non-blocking `working` flag below.
     state = "generating";
-  } else if (lines.some((l) => l.includes("? for shortcuts")) || inputBox) {
-    // "Ready for input" idle. We accept EITHER the status-line hint OR the
-    // structural presence of the pinned input box (a `>` flanked by two rules).
-    // The status wording can change between CLI versions ("? for shortcuts"),
-    // and relying on it alone made the extension miss readiness and wrongly
-    // report "session ended before it was ready" (#5). The input box is a far
-    // more stable signal — if it's painted, the CLI is waiting for a prompt.
+  } else if (lines.some((l) => l.includes("? for shortcuts"))) {
+    // Turn-done idle. This MUST require the status-line hint, not merely the
+    // pinned input box: the box is present all through a turn, so accepting it as
+    // idle let a mid-generation frame (one that briefly lacks "esc to cancel")
+    // read as a finished turn and finalize early — truncating the reply and
+    // desyncing later turns. Structural readiness is reported via `ready` below.
     state = "idle";
   } else {
     state = "starting";
@@ -489,7 +498,12 @@ export function interpretScreen(rawLines: string[]): ScreenView {
     turn.assistant = turn.assistant.replace(/\n{3,}/g, "\n\n").trim();
   }
   const working = state === "generating" || lines.some((l) => isTaskHint(l.trim()));
-  return { state, turns, prompt: selector?.prompt, input: inputBox?.text, working };
+  // Structural readiness (see ScreenView.ready): the input box is painted and
+  // we're not on the sign-in screen. Independent of `state` so it can clear the
+  // ended-before-ready guard even when the status wording differs (#5), without
+  // making a mid-turn frame look "idle".
+  const ready = !!inputBox && state !== "signin";
+  return { state, turns, prompt: selector?.prompt, input: inputBox?.text, working, ready };
 }
 
 /**

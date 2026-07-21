@@ -21,10 +21,18 @@ real `agy` TUI end-to-end.
   reply; the wrapped tail was leaking into the assistant text. It is now stripped.
 - **Selector separators are no longer shown as dead options.** A group divider
   such as `/resume`'s "── other workspaces ──" is recognised and skipped.
+- **Sessions no longer hang / drop replies after a few turns (#hang).** A
+  readiness tweak had made *any* frame showing the pinned input box read as
+  "idle" — including a mid-generation frame that momentarily lacks the
+  "esc to cancel" line — so a turn could be finalized while the agent was still
+  answering; the next prompt was then sent while the CLI was busy and never ran.
+  Readiness ("ready for input") and turn-completion ("idle") are now separate
+  signals: idle still requires the "? for shortcuts" status line, while a new
+  structural `ready` flag (the input box is painted) clears the startup guard.
 - **Fewer false "session ended before it was ready" errors (#5).** Readiness now
-  also accepts the structural pinned input box, not only the exact
-  "? for shortcuts" status wording, so a CLI version that rewords the status line
-  is still detected as ready. The sign-in gate no longer hard-blocks when the
+  also uses the structural pinned input box (the new `ready` flag), not only the
+  exact "? for shortcuts" status wording, so a CLI version that rewords the
+  status line is still detected as ready. The sign-in gate no longer hard-blocks when the
   on-disk token check misses a keychain-stored or terminal-established login
   (#3, #5) — "Continue anyway" is always offered.
 - **Native Windows now reports the real cause instead of a misleading error

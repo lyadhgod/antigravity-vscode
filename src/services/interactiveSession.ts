@@ -240,6 +240,25 @@ export class InteractiveSessionService {
     entry.write(line + "\r");
   }
 
+  /**
+   * Types free text into whatever the CLI is currently waiting on, then presses
+   * Enter as a SEPARATE write. Used for the sign-in flow's OAuth authorization
+   * code (#7), which the normal {@link send} can't handle: that screen has no
+   * pinned `>` box, so our readiness heuristic never flips and `send` would just
+   * *queue* the code forever (it looked like "nothing happens" on submit); and it
+   * is a paste widget that swallows a `\r` arriving in the same write as the
+   * text, leaving the code entered but not submitted. So we skip the `ready`
+   * gate (the user only submits once the code screen is up) and split the Enter.
+   */
+  submitInput(id: string, text: string): void {
+    const entry = this.live.get(id);
+    if (!entry) {
+      return;
+    }
+    entry.write(text.replace(/\r?\n/g, " "));
+    setTimeout(() => this.live.get(id)?.write("\r"), 120);
+  }
+
   /** Sends a control key, e.g. ESC to cancel a generating turn or dismiss a selector. */
   sendKey(id: string, key: "escape" | "interrupt"): void {
     const seq = key === "escape" ? "\x1b" : "\x03";
@@ -384,7 +403,9 @@ export class InteractiveSessionService {
 
     const view = interpretScreen(lines);
     // Once the prompt is first ready, release any prompts queued during boot.
-    if (!entry.ready && (view.state === "idle" || view.state === "generating" || view.state === "prompt")) {
+    // `view.ready` (the pinned input box is painted) is a status-wording-agnostic
+    // readiness signal alongside the run states (#5).
+    if (!entry.ready && (view.ready || view.state === "idle" || view.state === "generating" || view.state === "prompt")) {
       entry.ready = true;
       const queued = entry.queue.splice(0);
       for (const line of queued) {

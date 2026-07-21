@@ -482,7 +482,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void vscode.commands.executeCommand("antigravity.login");
         break;
       case "loginSubmitCode":
-        this.interactive.send(LOGIN_SESSION_ID, msg.code);
+        // The OAuth code screen has no pinned `>` box and is a paste widget, so
+        // this must bypass the readiness queue and press Enter separately (#7).
+        this.interactive.submitInput(LOGIN_SESSION_ID, msg.code);
         break;
       case "loginOpenUrl":
         if (this.loginUrl) {
@@ -626,7 +628,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!rt) {
       return;
     }
-    if (view.state === "idle" || view.state === "generating" || view.state === "prompt") {
+    // `view.ready` (input box painted) marks readiness independent of the status
+    // wording, so a valid session never trips the "ended before ready" guard (#5).
+    if (view.ready || view.state === "idle" || view.state === "generating" || view.state === "prompt") {
       rt.readyOnce = true;
     }
     const active = this.activeSessionId === sessionId;

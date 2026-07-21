@@ -109,8 +109,26 @@ body[data-view="chat"] .app-bar .app-bar__back {
 .gate__row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
 .btn--text.gate__open { display: inline-flex; align-items: center; gap: 6px; width: auto; margin-top: 0; }
 #gate-code-row { margin-top: 10px; }
-/* The code box's submit button turns primary-colored once there's text to send (#4). */
-#gate-code-submit.is-active { background: var(--ag-primary); color: var(--ag-on-primary); }
+/* The code box's submit button turns primary-colored once there's text to send
+   (#4). It needs its own hover treatment: `.icon-btn:hover`'s background is a
+   plain class+pseudo selector, which this ID rule always outranks — so without
+   this, hovering a "ready to submit" button showed no feedback at all. Match the
+   filled "+ New Session" button, whose hover is a subtle COLOR change (a state
+   layer, `.btn:hover::after` = currentColor at 8% over the primary), not a glow. */
+#gate-code-submit.is-active {
+  background: var(--ag-primary); color: var(--ag-on-primary);
+  transition: background var(--ag-dur-short) var(--ag-ease-emphasized),
+              transform var(--ag-dur-short) var(--ag-ease-spring);
+}
+/* `:not(:disabled)` keeps the hover color-change from firing while the button is
+   in its loading/disabled state (below). */
+#gate-code-submit.is-active:not(:disabled):hover { background: color-mix(in srgb, var(--ag-on-primary) 8%, var(--ag-primary)); }
+/* Verifying the submitted code: the row is locked but the code stays readable,
+   and the checkmark is replaced by the M3 loading indicator (on-primary so it
+   reads on the filled button). */
+#gate-code-row.is-submitting .writein__input { opacity: 0.6; }
+#gate-code-submit.is-submitting { cursor: default; }
+#gate-code-submit.is-submitting .m3-loader { color: var(--ag-on-primary); }
 
 /* --- Sessions list (step 1, #5) ------------------------------------------- */
 .list { flex: 1 1 auto; flex-direction: column; overflow-y: auto; padding: 14px; gap: 10px; }

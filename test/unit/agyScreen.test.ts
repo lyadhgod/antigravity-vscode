@@ -407,10 +407,10 @@ describe("agyScreen.interpretScreen — state", () => {
   it("detects the signed-out state", () => {
     assert.strictEqual(interpretScreen(SIGNIN).state, "signin");
   });
-  it("treats the pinned input box as idle even if the status wording changed (#5)", () => {
-    // Same ready screen but with a reworded/absent status line — the CLI is still
-    // waiting for input (the `>` box is painted), so we must NOT read "starting"
-    // (which drives the false "session ended before it was ready" message).
+  it("flags `ready` from the pinned input box even if the status wording changed (#5)", () => {
+    // Reworded/absent status line — the CLI is still waiting for input (the `>`
+    // box is painted). `ready` must be true (so the "session ended before it was
+    // ready" guard clears), but the box alone must NOT make it look "idle".
     const readyNoStatusHint = [
       "      ▄▀▀▄        Antigravity CLI 9.9.9",
       "  ▄▀▀      ▀▀▄",
@@ -423,11 +423,42 @@ describe("agyScreen.interpretScreen — state", () => {
       "────────────────────────────────────────────────────────────",
       "press ? for help                                            SomeModel"
     ];
-    assert.strictEqual(interpretScreen(readyNoStatusHint).state, "idle");
+    const view = interpretScreen(readyNoStatusHint);
+    assert.strictEqual(view.ready, true);
+    assert.notStrictEqual(view.state, "idle"); // not finalize-worthy without "? for shortcuts"
   });
-  it("still reports 'starting' before the input box is painted", () => {
-    const booting = ["      ▄▀▀▄        Antigravity CLI 1.0.4", "     ▀▀▀▀▀▀       loading…"];
-    assert.strictEqual(interpretScreen(booting).state, "starting");
+  it("a mid-generation frame is NOT idle even though the input box is painted (#hang)", () => {
+    // Verified failure mode: during a turn the pinned `>` box is present, but a
+    // frame briefly lacks BOTH "esc to cancel" and "? for shortcuts". Treating the
+    // box as idle here finalized the turn early (truncated reply / desynced later
+    // turns). It must read as generating (a spinner is still up) — never idle.
+    const midTurn = [
+      "────────────────────────────────────────────────────────────",
+      "> explain PTYs in four sentences",
+      "  A pseudo-terminal is a software device pair…",
+      "⣷ Generating…",
+      "────────────────────────────────────────────────────────────",
+      ">",
+      "────────────────────────────────────────────────────────────",
+      "                                                            Gemini 3.5 Flash"
+    ];
+    const view = interpretScreen(midTurn);
+    assert.notStrictEqual(view.state, "idle");
+    assert.strictEqual(view.state, "generating");
+  });
+  it("a settled frame with a painted box but no status hint is 'starting', not 'idle'", () => {
+    const noHint = [
+      "────────────────────────────────────────────────────────────",
+      "> hi",
+      "  Hello!",
+      "────────────────────────────────────────────────────────────",
+      ">",
+      "────────────────────────────────────────────────────────────",
+      "                                                            SomeModel"
+    ];
+    const view = interpretScreen(noHint);
+    assert.strictEqual(view.state, "starting");
+    assert.strictEqual(view.ready, true); // still ready for input (box painted)
   });
   it("flags working for a braille spinner and a /tasks hint (the latter non-blocking)", () => {
     const f = (x: string[]) => ["────────", "> hi", "────────"].concat(x);

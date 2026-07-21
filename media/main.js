@@ -79,7 +79,13 @@
     working: false
   };
 
-  function setView(v) { document.body.dataset.view = v; }
+  function setView(v) {
+    // Leaving the sign-in gate: reset its card to the initial "not signed in"
+    // view, so a later return starts clean (Sign in button showing, no leftover
+    // OAuth URL/code controls, loader, or disabled state).
+    if (document.body.dataset.view === "gate" && v !== "gate") resetGateCard();
+    document.body.dataset.view = v;
+  }
 
   // ===========================================================================
   //  Markdown (escape-first)
@@ -476,7 +482,6 @@
       state.defaultsApplied = true;
       syncNewopts();
     }
-    const wasRecheck = state.rechecking;
     state.rechecking = false;
     resetRecheck();
     if (!s.ready) {
@@ -488,15 +493,12 @@
         if (document.body.dataset.view !== "chat") setView("list");
       } else {
         setView("gate");
-        // The sign-in check is a best-effort disk probe: newer CLIs keep the
-        // token in the OS keychain, and a sign-in done in the terminal also
-        // leaves no file we can see — so a valid session can read as "signed
-        // out" (#3, #5). Always offer "Continue anyway" (not just after a
-        // recheck) so those users are never trapped at the gate.
-        $("gate-message").textContent = wasRecheck
-          ? "Still couldn't confirm sign-in. If you signed in elsewhere (terminal or another device), continue anyway."
-          : (s.message || "Sign in with your Google account — or, if you're already signed in via the terminal, continue anyway.");
-        $("gate-skip").hidden = false;
+        // The sign-in check is a best-effort disk probe (newer CLIs keep the
+        // token in the OS keychain; a terminal login leaves no file we can see),
+        // so a valid session can read as "signed out" (#3, #5). The single
+        // "Already signed in?" button re-probes AND proceeds, so those users are
+        // never trapped — no separate "continue anyway" needed.
+        $("gate-message").textContent = s.message || "Sign in with your Google account to start using Antigravity.";
       }
     } else if (document.body.dataset.view !== "chat") {
       setView("list");
@@ -636,7 +638,7 @@
     vscode.postMessage({ type: "ready" });
   }
   function resetRecheck() {
-    for (const id of ["gate-refresh", "notfound-refresh"]) {
+    for (const id of ["gate-check", "notfound-refresh"]) {
       const b = $(id); if (b) { b.disabled = false; if (b.dataset.label) b.textContent = b.dataset.label; }
     }
     $("gate-action").disabled = false;
@@ -647,14 +649,43 @@
   const gateCodeRow = $("gate-code-row");
   const gateCode = /** @type {HTMLInputElement} */ ($("gate-code"));
   const gateCodeSubmit = $("gate-code-submit");
+  const gateCodeIcon = gateCodeSubmit.innerHTML; // the checkmark, restored after a submit
+  // The "Sign in with Google" button and the URL/code controls are mutually
+  // exclusive: once the CLI has reached the OAuth screen, "Sign in" no longer
+  // does anything useful (a session is already running), so it's hidden
+  // entirely rather than merely disabled-but-visible.
+  function setLoginUrlControlsVisible(visible) {
+    gateUrlRow.hidden = !visible;
+    gateCodeRow.hidden = !visible;
+    $("gate-action").hidden = visible;
+  }
+  // While the submitted code is being verified: keep the code visible in the box
+  // (don't clear it), lock the whole row, and swap the checkmark for the same
+  // M3 loading indicator used for the in-session busy state (#4).
+  function setLoginSubmitting(on) {
+    gateCodeSubmit.disabled = on;
+    gateCode.readOnly = on;
+    gateCodeRow.classList.toggle("is-submitting", on);
+    gateCodeSubmit.classList.toggle("is-submitting", on);
+    gateCodeSubmit.innerHTML = on ? loaderSvg(20) : gateCodeIcon;
+  }
   function hideLoginControls() {
-    gateUrlRow.hidden = true; gateCodeRow.hidden = true;
+    setLoginUrlControlsVisible(false);
+    setLoginSubmitting(false);
     gateCode.value = ""; gateCodeSubmit.classList.remove("is-active");
   }
+  // Full reset to the initial gate view (also re-enables the Sign in button,
+  // which hideLoginControls leaves as the login-in-progress disabled state).
+  function resetGateCard() {
+    hideLoginControls();
+    $("gate-action").disabled = false;
+  }
   function submitLoginCode() {
+    if (gateCodeSubmit.disabled) return;
     const code = gateCode.value.trim(); if (!code) return;
     vscode.postMessage({ type: "loginSubmitCode", code });
-    gateCode.value = ""; gateCodeSubmit.classList.remove("is-active");
+    // Keep the code in the box and show the loading state until sign-in advances.
+    setLoginSubmitting(true);
   }
   $("gate-action").addEventListener("click", () => {
     $("gate-action").disabled = true; hideLoginControls();
@@ -666,10 +697,15 @@
   gateCode.addEventListener("input", () => gateCodeSubmit.classList.toggle("is-active", gateCode.value.trim() !== ""));
   gateCode.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitLoginCode(); } });
 
-  $("gate-refresh").addEventListener("click", (e) => recheck(e.currentTarget));
   $("notfound-refresh").addEventListener("click", (e) => recheck(e.currentTarget));
-  $("gate-skip").addEventListener("click", () => {
-    state.proceeded = true; vscode.postMessage({ type: "openAnyway" }); setView("list");
+  // "Already signed in?" checks BOTH possibilities in one click: re-probe auth
+  // (catches a token that's now on disk) AND proceed regardless (covers a login
+  // the disk check can't see — keychain / terminal). Either way you land in the
+  // app; agy's own in-chat sign-in is the final safety net if truly signed out.
+  $("gate-check").addEventListener("click", (e) => {
+    state.proceeded = true;                       // a negative re-check won't bounce back to the gate
+    vscode.postMessage({ type: "openAnyway" });   // populate sessions + proceed
+    recheck(e.currentTarget);                     // re-probe auth; shows "Checking…"
   });
 
   // ===========================================================================
@@ -739,7 +775,7 @@
       case "promptEnd": clearPrompt(); break;
       case "cliInput": reflectInput(msg.text); break;
       case "working": setWorking(msg.value); break;
-      case "loginUrl": gateUrlRow.hidden = false; gateCodeRow.hidden = false; break;
+      case "loginUrl": setLoginUrlControlsVisible(true); break;
       case "loginError": hideLoginControls(); $("gate-action").disabled = false; $("gate-message").textContent = msg.message; break;
       case "system":
         if (msg.text === "__open_slash__") { input.value = "/"; input.focus(); maybeShowSlash(); }

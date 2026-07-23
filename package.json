@@ -251,7 +251,8 @@
     "check-types": "tsc --noEmit",
     "pretest": "tsc -p tsconfig.test.json && node esbuild.js",
     "test": "mocha",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "build": "npm run package && npx @vscode/vsce package"
   },
   "overrides": {
     "serialize-javascript": "^7.0.7"

@@ -1,7 +1,7 @@
 import * as assert from "node:assert";
-import * as path from "node:path";
 
-import { decideOnboarding, looksLikeLoginError, oauthTokenPath, parseVersion } from "../../src/core/onboarding";
+import { ScreenView } from "../../src/core/agyScreen";
+import { decideOnboarding, looksLikeLoginError, parseVersion, screenNeedsLogin } from "../../src/core/onboarding";
 
 describe("onboarding.decideOnboarding", () => {
   it("returns notfound when the binary is missing", () => {
@@ -24,12 +24,33 @@ describe("onboarding.decideOnboarding", () => {
   });
 });
 
-describe("onboarding.oauthTokenPath", () => {
-  it("builds the path under ~/.gemini/antigravity-cli", () => {
-    assert.strictEqual(
-      oauthTokenPath("/home/me", path.posix.join),
-      "/home/me/.gemini/antigravity-cli/antigravity-oauth-token"
-    );
+describe("onboarding.screenNeedsLogin", () => {
+  const view = (v: Partial<ScreenView>): ScreenView => ({ state: "starting", turns: [], ...v });
+  const selector = (title: string, labels: string[]) => ({
+    title,
+    context: "",
+    options: labels.map((label) => ({ label, checked: false, writeIn: false })),
+    selectedIndex: 0,
+    layout: "vertical" as const,
+    multi: false
+  });
+
+  it("needs login on the sign-in screen", () => {
+    assert.ok(screenNeedsLogin(view({ state: "signin" })));
+  });
+
+  it("needs login on the first-run auth-method selector", () => {
+    const prompt = selector("How would you like to authenticate?", ["Google OAuth", "API key"]);
+    assert.ok(screenNeedsLogin(view({ state: "prompt", prompt })));
+  });
+
+  it("does not need login at the ready input prompt", () => {
+    assert.ok(!screenNeedsLogin(view({ state: "idle", ready: true })));
+  });
+
+  it("does not need login for an unrelated selector", () => {
+    const prompt = selector("Choose a color scheme", ["Dark", "Light"]);
+    assert.ok(!screenNeedsLogin(view({ state: "prompt", prompt })));
   });
 });
 

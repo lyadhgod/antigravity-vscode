@@ -632,6 +632,16 @@
   // Refresh re-probes the CLI (sign-in / install state). Give it visible feedback
   // so it never looks dead — disable + "Checking…"; applyState() restores it when
   // the host replies (it always does, even on error).
+  // The auth probe runs the real CLI, so it takes a moment. Pulse the whole panel
+  // as a skeleton meanwhile — but only before the user is in the app (a
+  // background re-check must not blank the list/chat), and never on top of a
+  // sign-in flow in progress (`gate-action` is disabled for its duration), whose
+  // OAuth URL/code controls live in the gate card.
+  function showChecking() {
+    const v = document.body.dataset.view;
+    if ((v === "gate" || v === "notfound") && !$("gate-action").disabled) setView("checking");
+  }
+
   function recheck(btn) {
     state.rechecking = true;
     if (btn) { if (!btn.dataset.label) btn.dataset.label = btn.textContent; btn.disabled = true; btn.textContent = "Checking…"; }
@@ -680,6 +690,21 @@
     hideLoginControls();
     $("gate-action").disabled = false;
   }
+
+  // A live session hit the CLI's sign-in wall. The host has already ended every
+  // session; here we tear down the chat UI, clear the "continue anyway" latch
+  // (this is a CONFIRMED logout, not a maybe) and show the gate with the marker.
+  function showLoggedOut(message) {
+    state.proceeded = false;
+    state.rechecking = false;
+    clearPrompt(); setBusy(false); setWorking(false);
+    transcript.innerHTML = ""; state.current = null;
+    setView("gate");
+    resetGateCard();
+    const alert = $("gate-alert");
+    alert.textContent = message;
+    alert.hidden = false;
+  }
   function submitLoginCode() {
     if (gateCodeSubmit.disabled) return;
     const code = gateCode.value.trim(); if (!code) return;
@@ -688,6 +713,10 @@
     setLoginSubmitting(true);
   }
   $("gate-action").addEventListener("click", () => {
+    // The "you got logged out" marker is about to be acted on — drop it. It is
+    // deliberately NOT cleared by resetGateCard, so it survives the skeleton
+    // bounce of a re-probe (panel hidden/shown) until the user actually signs in.
+    $("gate-alert").hidden = true;
     $("gate-action").disabled = true; hideLoginControls();
     vscode.postMessage({ type: "login" });
   });
@@ -759,6 +788,7 @@
   window.addEventListener("message", (e) => {
     const msg = e.data;
     switch (msg.type) {
+      case "checking": showChecking(); break;
       case "state": applyState(msg.state); break;
       case "slashCatalog": state.catalog = msg.commands; break;
       case "sessions":
@@ -776,6 +806,7 @@
       case "cliInput": reflectInput(msg.text); break;
       case "working": setWorking(msg.value); break;
       case "loginUrl": setLoginUrlControlsVisible(true); break;
+      case "loggedOut": showLoggedOut(msg.message); break;
       case "loginError": hideLoginControls(); $("gate-action").disabled = false; $("gate-message").textContent = msg.message; break;
       case "system":
         if (msg.text === "__open_slash__") { input.value = "/"; input.focus(); maybeShowSlash(); }

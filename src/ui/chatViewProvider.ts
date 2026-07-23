@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as vscode from "vscode";
 
 import { AgyState, ScreenView, findUrl, replyFor } from "../core/agyScreen";
-import { decideOnboarding } from "../core/onboarding";
+import { decideOnboarding, screenNeedsLogin } from "../core/onboarding";
 import { SessionPersistence, SessionStore } from "../core/sessionStore";
 import { SLASH_COMMANDS, findSlashCommand, parseSlash } from "../core/slashCommands";
 import { ChatMessage, Session } from "../core/types";
@@ -397,6 +397,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   async refreshState(): Promise<void> {
     const config = this.cli.getConfig();
     const defaults = { sandbox: config.sandbox, skipPermissions: config.skipPermissions };
+    // The auth check launches the CLI and waits to see whether it asks for a
+    // login, so this is not instant — tell the webview to show its skeleton.
+    this.post({ type: "checking" });
     try {
       const detection = await this.cli.detect();
       const decision = decideOnboarding(detection);
@@ -633,6 +636,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (view.ready || view.state === "idle" || view.state === "generating" || view.state === "prompt") {
       rt.readyOnce = true;
     }
+    // The CLI is asking to sign in mid-session — the credential expired or was
+    // revoked. Sessions all share the one account, so none of them can continue.
+    if (screenNeedsLogin(view)) {
+      this.handleLoggedOut();
+      return;
+    }
     const active = this.activeSessionId === sessionId;
 
     // The TUI is blocking on an option selector: surface it as clickable choices.
@@ -703,6 +712,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     rt.lastWorking = working;
     rt.lastState = view.state;
     rt.lastView = view;
+  }
+
+  /**
+   * Signed out mid-flight: end **every** session (their processes are all sitting
+   * on the same sign-in wall) and send the user back to the gate with a marker
+   * saying why. `loggedOut` is its own message rather than a `state` push because
+   * it must also clear the webview's "continue anyway" latch — otherwise a user
+   * who once clicked "Already signed in?" would be bounced past the gate.
+   */
+  private handleLoggedOut(): void {
+    for (const id of [...this.runtimes.keys()]) {
+      this.disposeMirror(id);
+      this.interactive.dispose(id);
+      this.runtimes.delete(id);
+      this.store.delete(id);
+    }
+    this.activeSessionId = undefined;
+    this.sendSessions();
+    this.post({ type: "loggedOut", message: "You got logged out — your sessions were ended. Sign in to continue." });
   }
 
   /** Handles a session's process exiting — drops the session (lifecycle #). */

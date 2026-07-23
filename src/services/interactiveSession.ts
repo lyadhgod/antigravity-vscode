@@ -27,6 +27,7 @@ import { Terminal } from "@xterm/headless";
 
 import { buildSessionArgs } from "../core/argBuilder";
 import { ScreenView, interpretScreen, moveKeys, selectionKeys } from "../core/agyScreen";
+import { screenNeedsLogin } from "../core/onboarding";
 import { missingPtyBackendMessage, planLaunch } from "../core/ptyLauncher";
 import { AntigravityConfig } from "../core/types";
 
@@ -83,6 +84,10 @@ const RENDER_DEBOUNCE_MS = 120;
 const RAW_CAP = 1_500_000;
 /** Grace period after Ctrl+Z (end the session, #6) before we terminate `agy`. */
 const SHUTDOWN_GRACE_MS = 250;
+/** Id of the throwaway session used to ask the CLI itself whether login is needed. */
+const PROBE_SESSION_ID = "__authprobe__";
+/** Give the probe this long to reach a decisive screen before assuming "no login needed". */
+const PROBE_TIMEOUT_MS = 20000;
 
 /** Per-session launch toggles chosen in the New Session menu (#5). */
 export interface SessionLaunchOptions {
@@ -131,8 +136,47 @@ export class InteractiveSessionService {
 
   constructor(private readonly cli: AgyEnv) {}
 
+  /** In-flight auth probe, so concurrent refreshes share one spawned CLI. */
+  private probe?: Promise<boolean>;
+
   isRunning(id: string): boolean {
     return this.live.has(id);
+  }
+
+  /**
+   * Asks the CLI itself whether the user must sign in: launch a throwaway `agy`
+   * and watch what it paints. A sign-in screen (or an auth-method selector) means
+   * login is required; reaching the input prompt means it is not.
+   *
+   * Anything else — process exits early, no PTY backend, the probe times out —
+   * resolves `true`. We only demand a login when the CLI actually asked for one;
+   * an undecidable probe must never wedge the user behind a sign-in gate.
+   */
+  probeAuth(): Promise<boolean> {
+    return (this.probe ??= new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (authenticated: boolean): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        this.probe = undefined;
+        this.dispose(PROBE_SESSION_ID);
+        resolve(authenticated);
+      };
+      const timer = setTimeout(() => finish(true), PROBE_TIMEOUT_MS);
+      this.start(PROBE_SESSION_ID, {
+        onScreen: (view) => {
+          if (screenNeedsLogin(view)) {
+            finish(false);
+          } else if (view.ready) {
+            finish(true);
+          }
+        },
+        onExit: () => finish(true)
+      });
+    }));
   }
 
   /**

@@ -47,6 +47,8 @@ export interface SessionSummary {
 
 /** Messages sent from the extension host → webview. */
 export type HostToWebview =
+  /** A sign-in probe started (it launches `agy`) — show the pulsing skeleton until `state` lands. */
+  | { type: "checking" }
   | { type: "state"; state: ChatState }
   | { type: "slashCatalog"; commands: SlashCommand[] }
   | { type: "sessions"; sessions: SessionSummary[] }
@@ -69,7 +71,9 @@ export type HostToWebview =
   /** The sign-in flow reached the OAuth URL/code screen — show the gate's URL + code controls. */
   | { type: "loginUrl"; url: string }
   /** The sign-in flow was interrupted (the CLI process exited before reaching idle). */
-  | { type: "loginError"; message: string };
+  | { type: "loginError"; message: string }
+  /** A live session hit the CLI's sign-in wall: all sessions were ended, show the gate + marker. */
+  | { type: "loggedOut"; message: string };
 
 /** Messages sent from the webview → extension host. */
 export type WebviewToHost =

@@ -7,8 +7,10 @@
     <link href="{{styleUri}}" rel="stylesheet" />
     <title>Antigravity</title>
   </head>
-  <!-- data-view ∈ {gate, list, chat} controls which section is visible. -->
-  <body data-view="gate">
+  <!-- data-view ∈ {checking, notfound, gate, list, chat} controls which section
+       is visible. It starts on `checking`: the sign-in probe launches the real
+       CLI, so nothing is known until it answers. -->
+  <body data-view="checking">
     <header class="app-bar">
       <div class="app-bar__title">
         <!-- Back to the sessions list (#5); shown only in the chat step. -->
@@ -20,6 +22,18 @@
         <span>Antigravity</span>
       </div>
     </header>
+
+    <!-- Sign-in probe in flight: the whole panel pulses as a skeleton until the
+         CLI tells us whether it wants a login. -->
+    <section id="checking" class="gate skeleton" aria-busy="true" aria-label="Checking sign-in">
+      <div class="skeleton__card">
+        <div class="skeleton__bar skeleton__bar--logo"></div>
+        <div class="skeleton__bar skeleton__bar--title"></div>
+        <div class="skeleton__bar"></div>
+        <div class="skeleton__bar skeleton__bar--short"></div>
+        <div class="skeleton__bar skeleton__bar--btn"></div>
+      </div>
+    </section>
 
     <!-- CLI not found page. -->
     <section id="notfound" class="gate">
@@ -37,6 +51,8 @@
       <div class="gate__card">
         <img class="gate__logo" src="{{logoUri}}" alt="" aria-hidden="true" />
         <h2>Sign in to continue</h2>
+        <!-- Marker shown when a live session hit the CLI's sign-in wall. -->
+        <p id="gate-alert" class="gate__alert" role="alert" hidden></p>
         <p id="gate-message">Sign in with your Google account to start using Antigravity.</p>
         <button id="gate-action" class="btn" type="button">Sign in with Google</button>
         <!-- Sign-in flow (#7): shown once the CLI prints the OAuth URL. -->

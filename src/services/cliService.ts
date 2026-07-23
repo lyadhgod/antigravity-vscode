@@ -16,7 +16,7 @@ import * as vscode from "vscode";
 
 import { buildVersionArgs } from "../core/argBuilder";
 import { ResolverEnv, resolveBinary } from "../core/binaryResolver";
-import { oauthTokenPath, parseVersion } from "../core/onboarding";
+import { parseVersion } from "../core/onboarding";
 import { runProcess } from "../core/processRunner";
 import { AntigravityConfig, DetectionResult } from "../core/types";
 
@@ -67,31 +67,19 @@ export class CliService {
   }
 
   /**
-   * Best-effort sign-in check: older CLIs cache an OAuth token on disk after the
-   * Google sign-in flow, so a non-empty token file means "signed in" — a fast,
-   * reliable *positive*. It is NOT a reliable *negative*, though: newer CLIs keep
-   * the credential in the OS keychain (macOS Keychain) and a sign-in done in the
-   * terminal leaves no file we can read, so an authenticated user can still read
-   * as "signed out" (issues #3, #5). That is why the gate never hard-blocks on
-   * this result — the webview always offers "Continue anyway", and the live
-   * interactive session (which detects `state === "signin"`) is the real source
-   * of truth once a chat starts.
+   * Injected at wiring time (extension.ts): the live sign-in probe, which
+   * launches `agy` and reports whether the CLI itself asked the user to log in.
+   * Unset (e.g. in tests) means "nothing asked for a login" — never block.
    */
-  isAuthenticated(): boolean {
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    if (!home) {
-      return false;
-    }
-    try {
-      return fs.statSync(oauthTokenPath(home, path.join)).size > 0;
-    } catch {
-      return false;
-    }
+  private authProbe?: () => Promise<boolean>;
+
+  setAuthProbe(probe: () => Promise<boolean>): void {
+    this.authProbe = probe;
   }
 
   /**
    * Probes the environment: runs `agy --version` to confirm the binary exists,
-   * and checks the OAuth token for sign-in state.
+   * then asks the CLI itself (via {@link authProbe}) whether a login is needed.
    */
   async detect(): Promise<DetectionResult> {
     const command = this.resolveCommand();
@@ -105,7 +93,7 @@ export class CliService {
       command,
       found: true,
       version: parseVersion(res.stdout || res.stderr),
-      authenticated: this.isAuthenticated()
+      authenticated: this.authProbe ? await this.authProbe() : true
     };
   }
 }

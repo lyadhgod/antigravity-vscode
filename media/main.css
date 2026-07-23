@@ -52,7 +52,8 @@ body {
 [hidden] { display: none !important; }
 
 /* --- View switching -------------------------------------------------------- */
-#notfound, #gate, #list, #chatarea, #composer { display: none; }
+#checking, #notfound, #gate, #list, #chatarea, #composer { display: none; }
+body[data-view="checking"] #checking { display: flex; }
 body[data-view="notfound"] #notfound { display: flex; }
 body[data-view="gate"] #gate { display: flex; }
 body[data-view="list"] #list { display: flex; }
@@ -87,6 +88,21 @@ body[data-view="chat"] .app-bar .app-bar__back {
   width: 40px; min-width: 40px; margin-right: 0; transform: scale(1); opacity: 1;
 }
 
+/* --- Auth-check skeleton --------------------------------------------------- */
+/* The sign-in check launches the real `agy` and waits to see whether it asks for
+   a login, which takes a moment. Rather than guessing a gate we may have to take
+   back, the whole panel space pulses as a skeleton until the answer arrives. The
+   animation sits on the section, so everything in it pulses as one. */
+.skeleton { flex-direction: column; animation: pulse 1.6s var(--ag-ease-emphasized) infinite; }
+.skeleton__card { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; max-width: 320px; }
+.skeleton__bar { width: 100%; height: 14px; border-radius: var(--ag-shape-full); background: var(--ag-surface-container-highest); }
+.skeleton__bar--logo { width: 72px; height: 72px; border-radius: var(--ag-shape-lg); margin-bottom: 4px; }
+.skeleton__bar--title { width: 60%; height: 22px; }
+.skeleton__bar--short { width: 75%; }
+.skeleton__bar--btn { width: 70%; height: 40px; margin-top: 10px; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; opacity: 0.7; } }
+
 /* --- Sign-in / install gate (#7) ------------------------------------------ */
 .gate { flex: 1 1 auto; align-items: center; justify-content: center; padding: 24px; }
 .gate__card {
@@ -98,6 +114,12 @@ body[data-view="chat"] .app-bar .app-bar__back {
 .gate__card h2 { margin: 0 0 8px; font-size: 21px; }
 .gate__card p { margin: 0 0 16px; color: var(--ag-on-surface-variant); }
 .gate__install-hint { margin-bottom: 4px !important; }
+/* "You got logged out" marker — an error-toned banner above the gate message. */
+.gate__alert {
+  padding: 10px 12px; border-radius: var(--ag-shape-sm);
+  background: var(--ag-error-container); color: var(--ag-on-surface) !important;
+  text-align: left;
+}
 .gate__link { color: var(--ag-primary); text-decoration: none; font-weight: 600; }
 .gate__link:hover { text-decoration: underline; }
 

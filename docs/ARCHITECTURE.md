@@ -40,9 +40,10 @@ The implementation is grounded in the real binary, not assumptions:
 - Real flags: `--add-dir` (repeatable), `--continue`/`-c`, `--conversation`,
   `--prompt-interactive`/`-i`, `--dangerously-skip-permissions`, `--sandbox`.
   Subcommands: `install`, `update`, `changelog`, `plugin`.
-- **Auth** is an OAuth token cached at
-  `~/.gemini/antigravity-cli/antigravity-oauth-token`; there is no `login`
-  subcommand — the first interactive run starts the Google sign‑in flow.
+- **Auth** has no `login` subcommand and no credential we can portably read (the
+  token may be on disk or in the OS keychain) — the first interactive run starts
+  the Google sign‑in flow, so "are we signed in?" is answered by launching `agy`
+  and seeing whether it asks (`InteractiveSessionService.probeAuth`).
 - `agy` is **agentic**: it may read the project and run tools to answer, so a
   turn can take a while; the UI streams the reply and offers a stop (esc) control.
 
@@ -67,8 +68,9 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
   ENOENT-ing on the missing `script`.
 - **`argBuilder`** — builds exact argv for session/version/subcommands; we always
   spawn with an explicit argv (no shell).
-- **`onboarding`** — install → sign‑in → ready decisions, the OAuth token path,
-  login‑error classification, and version parsing.
+- **`onboarding`** — install → sign‑in → ready decisions, reading "the CLI is
+  asking for a login" off a screen (`screenNeedsLogin`), login‑error
+  classification, and version parsing.
 - **`slashCommands`** — the catalog surfaced by the navigator. It is the **real**
   35-command set captured from `agy` v1.0.4 by driving its TUI through a PTY and
   reading the `/` autocomplete (aliases included), with routing (`native` vs.

@@ -54,9 +54,10 @@ The installer drops `agy` into `~/.local/bin` (Unix) or `%LOCALAPPDATA%\Antigrav
 `agy` authenticates with a **Google account**. Click **Sign in with Google** in
 the panel (or run **“Antigravity: Sign In”**); the CLI opens your browser for
 the OAuth grant, or — on a remote/SSH host — prints a URL and one‑time code in
-the terminal. The extension detects sign‑in via the cached token at
-`~/.gemini/antigravity-cli/antigravity-oauth-token` and reveals the chat once
-present. **Sign out** runs the CLI's `/logout`.
+the terminal. The extension decides whether you need to sign in by **invoking
+`agy` itself**: it launches the CLI and reveals the chat unless the CLI asks for
+a login. No cached token is inspected, so a sign‑in done in a terminal or held in
+the OS keychain counts. **Sign out** runs the CLI's `/logout`.
 
 ## Usage
 

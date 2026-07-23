@@ -25,6 +25,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const cli = new CliService();
   const terminal = new TerminalService(cli);
   const interactive = new InteractiveSessionService(cli);
+  // Sign-in state comes from invoking the CLI, not from any cached token: the
+  // probe launches `agy` and reports whether it asked the user to log in.
+  cli.setAuthProbe(() => interactive.probeAuth());
   const chat = new ChatViewProvider(context.extensionUri, cli, interactive, context);
 
   // 2. Register the Material 3 chat panel in the activity-bar container.

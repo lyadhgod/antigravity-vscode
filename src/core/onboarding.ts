@@ -1,9 +1,10 @@
 /**
  * Pure decision logic that turns a {@link DetectionResult} into a concrete
- * recommendation (sign in -> ready), plus helpers for locating the
- * OAuth token and classifying auth failures. Separated from the VS Code layer
- * so the branching is exhaustively unit-testable.
+ * recommendation (sign in -> ready), plus helpers for reading sign-in state off
+ * a live CLI screen and classifying auth failures. Separated from the VS Code
+ * layer so the branching is exhaustively unit-testable.
  */
+import { ScreenView } from "./agyScreen";
 import { DetectionResult, OnboardingDecision } from "./types";
 
 /** Heuristics that classify CLI output as an authentication problem. */
@@ -20,12 +21,18 @@ const LOGIN_HINTS = [
 ];
 
 /**
- * Path to the cached OAuth token, relative to the user's home directory. The
- * real CLI writes it to `~/.gemini/antigravity-cli/antigravity-oauth-token`.
- * Pure (caller supplies `home` and a `join`) so it is testable cross-platform.
+ * True when a live `agy` screen is asking the user to sign in: either the
+ * explicit sign-in screen, or the first-run selector offering an auth method.
+ *
+ * This is the ONLY auth signal we trust — what the CLI does when invoked. The
+ * old on-disk OAuth token check was a false negative for anyone whose
+ * credential lives in the OS keychain or was created in a terminal (#3, #5).
  */
-export function oauthTokenPath(home: string, join: (...parts: string[]) => string): string {
-  return join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+export function screenNeedsLogin(view: ScreenView): boolean {
+  return (
+    view.state === "signin" ||
+    !!view.prompt?.options.some((o) => /oauth|sign in|sign-in|log in|login/i.test(o.label))
+  );
 }
 
 /**

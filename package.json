@@ -62,6 +62,11 @@
           "default": false,
           "markdownDescription": "Pass `--sandbox` to run the agent with terminal restrictions enabled."
         },
+        "antigravity.debug": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Always reveal the CLI terminal. Every `agy` process — the sign-in flow and each chat session — is mirrored into a visible terminal as soon as it starts, so you can watch what the CLI is doing. Closing a mirror keeps it closed for that session."
+        },
         "antigravity.autoAddWorkspaceFolders": {
           "type": "boolean",
           "default": true,

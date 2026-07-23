@@ -56,6 +56,8 @@ interface SessionRuntime {
   lastWorking?: boolean;
   /** The on-demand mirror terminal, if the user opened one. */
   mirror?: vscode.Terminal;
+  /** True once the user closed the mirror — debug mode won't reopen it. */
+  mirrorDismissed?: boolean;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -74,6 +76,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private loginUrlLines?: string[];
   private loginUrlTimer?: ReturnType<typeof setTimeout>;
   private loginMirror?: vscode.Terminal;
+  private loginMirrorDismissed = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -95,7 +98,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (rt.mirror === closed) {
             this.interactive.detachMirror(id);
             rt.mirror = undefined;
+            rt.mirrorDismissed = true;
           }
+        }
+        if (this.loginMirror === closed) {
+          this.interactive.detachMirror(LOGIN_SESSION_ID);
+          this.loginMirror = undefined;
+          this.loginMirrorDismissed = true;
         }
       })
     );
@@ -257,9 +266,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Already showing → close it (clicking the terminal icon again, #4).
     if (this.runtimes.get(id)?.mirror) {
       this.disposeMirror(id);
+      this.runtimes.get(id)!.mirrorDismissed = true;
       return;
     }
     const rt = this.ensureProcess(id);
+    rt.mirrorDismissed = false;
+    this.showMirror(id, rt);
+  }
+
+  /** True when `antigravity.debug` asks for every CLI process to be visible. */
+  private get debug(): boolean {
+    return vscode.workspace.getConfiguration("antigravity").get<boolean>("debug", false);
+  }
+
+  /** Opens (and reveals) the session's mirror terminal, unless one is already up. */
+  private showMirror(id: string, rt: SessionRuntime): void {
+    if (rt.mirror) {
+      rt.mirror.show();
+      return;
+    }
     const title = this.store.get(id)?.title || "Antigravity";
     rt.mirror = this.createMirror(id, `Antigravity: ${title}`);
     rt.mirror.show();
@@ -294,6 +319,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.resetLoginUrlState();
     this.loginUrlOpened = false;
+    // A previous flow's terminal (kept around by debug mode) is attached to a
+    // dead process — drop it so this flow gets a fresh, live one.
+    this.loginMirror?.dispose();
+    this.loginMirror = undefined;
+    this.loginMirrorDismissed = false;
     this.interactive.start(LOGIN_SESSION_ID, {
       onScreen: (view, lines) => this.onLoginScreen(view, lines),
       onExit: (_code, error) => this.onLoginExit(error)
@@ -378,7 +408,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private showLoginMirror(): void {
-    if (this.loginMirror) {
+    if (this.loginMirror || this.loginMirrorDismissed) {
       return;
     }
     this.loginMirror = this.createMirror(LOGIN_SESSION_ID, "Antigravity Sign-in");
@@ -386,7 +416,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private hideLoginMirror(): void {
-    if (this.loginMirror) {
+    // In debug mode the sign-in terminal stays up until the user closes it.
+    if (this.loginMirror && !this.debug) {
       this.interactive.detachMirror(LOGIN_SESSION_ID);
       this.loginMirror.dispose();
       this.loginMirror = undefined;
@@ -621,6 +652,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         },
         { sandbox: session?.sandbox, skipPermissions: session?.skipPermissions }
       );
+    }
+    if (this.debug && !rt.mirrorDismissed) {
+      this.showMirror(sessionId, rt);
     }
     return rt;
   }

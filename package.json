@@ -252,7 +252,7 @@
     "pretest": "tsc -p tsconfig.test.json && node esbuild.js",
     "test": "mocha",
     "lint": "tsc --noEmit",
-    "build": "npm run package && npx @vscode/vsce package"
+    "build": "npx @vscode/vsce package"
   },
   "overrides": {
     "serialize-javascript": "^7.0.7"

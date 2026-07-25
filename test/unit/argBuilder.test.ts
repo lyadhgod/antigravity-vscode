@@ -64,12 +64,6 @@ describe("argBuilder.buildSessionArgs", () => {
     assert.ok(args.includes("--sandbox"));
     assert.ok(!args.includes("--dangerously-skip-permissions"));
   });
-
-  it("passes an initial prompt via --prompt-interactive last", () => {
-    const args = buildSessionArgs({ initialPrompt: "start here" }, config());
-    assert.strictEqual(args[args.length - 2], "--prompt-interactive");
-    assert.strictEqual(args[args.length - 1], "start here");
-  });
 });
 
 describe("argBuilder misc", () => {

@@ -53,9 +53,6 @@ export function buildSessionArgs(opts: SessionOptions, config: AntigravityConfig
   };
   applyCommonFlags(args, effective, opts.addDirs);
 
-  if (opts.initialPrompt) {
-    args.push("--prompt-interactive", opts.initialPrompt);
-  }
   return args;
 }
 

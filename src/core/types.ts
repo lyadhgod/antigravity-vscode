@@ -34,8 +34,6 @@ export interface SessionOptions {
   sandbox?: boolean;
   /** Skip tool-permission prompts (`--dangerously-skip-permissions`). Overrides config. */
   skipPermissions?: boolean;
-  /** An initial prompt to seed the session (`--prompt-interactive`). */
-  initialPrompt?: string;
 }
 
 /** Result of probing the environment for a usable, authenticated CLI. */

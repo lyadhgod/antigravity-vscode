@@ -8,6 +8,15 @@ src/**
 test/**
 out/**
 node_modules/**
+# …except the prebuilt Windows ConPTY backend, which the chat needs to run the
+# agy TUI on native Windows (#1, #2). Node-API binaries, so no rebuild per VS
+# Code version. Listed file-by-file because vsce's negations always beat a later
+# ignore rule — a blanket `!…/**` would drag in 10 MB of .pdb debug symbols.
+!node_modules/@lydell/node-pty-win32-*/package.json
+!node_modules/@lydell/node-pty-win32-*/LICENSE
+!node_modules/@lydell/node-pty-win32-*/lib/**
+!node_modules/@lydell/node-pty-win32-*/prebuilds/**/*.node
+!node_modules/@lydell/node-pty-win32-*/prebuilds/*/conpty/**
 docs/**
 **/*.ts
 **/*.map
@@ -20,3 +29,5 @@ tsconfig*.json
 .vscode/**
 cache/**
 .antigravitycli/**
+.claude/**
+.agents/**

@@ -35,13 +35,47 @@ real `agy` TUI end-to-end.
   status line is still detected as ready. The sign-in gate no longer hard-blocks when the
   on-disk token check misses a keychain-stored or terminal-established login
   (#3, #5) — "Continue anyway" is always offered.
-- **Native Windows now reports the real cause instead of a misleading error
-  (#1, #2).** The interactive session is launched through a platform-aware plan:
-  the `script`/`stty` PTY shim on macOS/Linux (unchanged), and a `node-pty`
-  ConPTY on Windows (`node-pty` is declared as an optionalDependency so installs
-  never fail where its native build is unavailable). When the ConPTY backend
-  isn't present, the user is told to use WSL rather than seeing a bogus "agy
-  isn't installed".
+- **macOS sessions and the sign-in check now work at all (#3).** The PTY shim was
+  `script` everywhere, but macOS/BSD `script` cannot be used from an extension:
+  besides not having the util-linux `-c`/`-e` flags, it calls `tcgetattr` on its
+  own stdin and aborts unless that fails with `ENOTTY` — and every stdin we can
+  write to (Node's piped stdio is a socketpair, as is a pipe or FIFO) fails with
+  `EOPNOTSUPP` instead. So it exited immediately with
+  `script: tcgetattr/ioctl: Operation not supported on socket`, before `agy` ever
+  ran. The auth probe saw no screen at all and fell through to "signed in", so
+  macOS reported a working CLI while signed out, and every session died at once.
+  macOS/BSD now use `expect` (also part of the base system), which allocates the
+  PTY itself and doesn't care what its own stdio is; Linux still uses `script`.
+- **No more duplicate browser launch on sign-in.** `agy` runs `open <url>` itself
+  the moment it paints the OAuth screen (it ignores `$BROWSER` and has no flag to
+  stop it), so the extension's own `openExternal` only added a redundant "open the
+  external website?" prompt for a page that was already open. The extension no
+  longer opens the URL automatically; the gate's Open button still does, on click.
+- **Sign-in no longer hangs with the button stuck disabled (#8).** Refreshing the
+  onboarding state launches a throwaway `agy` to ask whether a login is needed —
+  and the OAuth step opens the external browser, so returning to the editor fired
+  the panel's visibility refresh and spawned that second CLI *during* the sign-in,
+  racing the live one for the same credential store. It also swapped the gate card
+  for the "checking" skeleton and back on every return trip, clearing the OAuth URL
+  row and any code typed into it. A refresh is now skipped entirely while a sign-in
+  flow owns the CLI. Clicking "Sign in" again mid-flow no longer starts a second
+  CLI *or* silently swallows the click (which left the button, disabled on click,
+  with nothing able to re-enable it) — it re-surfaces the running flow instead.
+- **Closing a session no longer leaves an `agy` process behind.** `agy` ignores
+  SIGHUP and the PTY shim puts it in its own session, so killing the shim orphaned
+  it. Teardown now closes the shim's stdin first, which ends its forwarding loop
+  and kills `agy` by pid; the signals remain as a fallback.
+- **Native Windows chat now actually works (#1, #2).** The ConPTY backend is
+  shipped with the extension as prebuilt Node-API binaries
+  (`@lydell/node-pty-win32-x64` / `-arm64`), so no node-gyp rebuild per VS Code
+  version is needed and the WSL-only workaround is gone. A `.cmd`/`.bat` shim on
+  `PATH` (how npm-installed CLIs land there) is run through `cmd.exe /c`, since
+  ConPTY cannot execute one directly. If the backend is somehow missing, the
+  message names it instead of claiming `agy` isn't installed.
+- **A session that dies before the prompt now reports what it printed.** The
+  last output line (e.g. a `script` usage error or a CLI crash) is surfaced, and
+  spawn failures carry the OS error, instead of everything being blamed on
+  "check that `agy` is installed and you're signed in".
 
 ### Changed
 

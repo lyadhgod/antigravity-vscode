@@ -62,6 +62,13 @@ jobs:
         run: npm test
 
       # ── 5. Build the .vsix package ───────────────────────────────────────────
+      # `npm ci` only installs optionalDependencies matching this runner's
+      # platform (linux), so the Windows ConPTY prebuilts (#1, #2) are missing
+      # until `pty:win` force-installs both win32 arches for bundling.
+      - name: Install Windows ConPTY prebuilts
+        if: steps.ver.outputs.changed == 'true'
+        run: npm run pty:win
+
       - name: Package extension
         if: steps.ver.outputs.changed == 'true'
         run: |

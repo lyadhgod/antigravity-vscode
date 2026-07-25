@@ -21,8 +21,8 @@ contains no model logic, credentials, or network calls of its own.
 │  sessionStore · processRunner · types                                   │
 └─────────────────────────────────────────────────────────────────────────┘
         │ spawns via core/ptyLauncher:                 ▲ raw PTY bytes
-        │   Unix → `script -c "stty …; exec agy"`      │ (→ @xterm/headless)
-        ▼   Windows → node-pty ConPTY                  │
+        │   Unix → `script` + `stty` (2 argv flavours) │ (→ @xterm/headless)
+        ▼   Windows → prebuilt node-pty ConPTY         │
                               agy  (interactive TUI)
 ```
 
@@ -59,13 +59,20 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
 - **`binaryResolver`** — resolves `agy` from an explicit path, then `PATH`
   (honoring Windows `PATHEXT`), then the installer's well‑known locations.
 - **`ptyLauncher`** — decides how to put `agy` on a real PTY per platform: the
-  `script`/`stty` shim on macOS/Linux, a `node-pty` ConPTY on Windows (#1, #2).
-  Pure (the argv + `stty` string are unit-tested); the spawn itself lives in the
-  service. `node-pty` is declared as an **optionalDependency** and loaded via a
-  guarded runtime require (external in esbuild), so a platform where the native
-  build is unavailable still installs cleanly and — when the backend is absent on
-  Windows — the session reports that plainly and points at WSL instead of
-  ENOENT-ing on the missing `script`.
+  util-linux `script -c` form on Linux, `expect` on macOS/BSD (BSD `script`
+  aborts on any stdin we can write to — see the file header and #3 — so it made
+  every macOS session die instantly and the auth probe report "signed in" while
+  signed out), and a ConPTY on Windows
+  (#1, #2), with a `.cmd`/`.bat` shim wrapped in `cmd.exe /c`. Pure (the argv +
+  `stty` string are unit-tested); the spawn itself lives in the service. The
+  Windows backend is `@lydell/node-pty-win32-<arch>` — prebuilt **Node-API**
+  binaries, so they load in any Electron/VS Code version without a rebuild. They
+  are declared as **optionalDependencies** (so `npm i` on Unix skips them) and
+  pulled in for packaging by `npm run pty:win`, which installs them with
+  `--os=win32`; `.vscodeignore` carves them out of the `node_modules/**`
+  exclusion. The require is guarded and goes through a variable, so esbuild
+  leaves it as a runtime require and a missing backend degrades to a message
+  naming it.
 - **`argBuilder`** — builds exact argv for session/version/subcommands; we always
   spawn with an explicit argv (no shell).
 - **`onboarding`** — install → sign‑in → ready decisions, reading "the CLI is
@@ -87,7 +94,7 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
 
 - **`InteractiveSessionService`** owns one interactive `agy` process per chat
   session. It spawns `agy` on a real PTY via `core/ptyLauncher` (the `script`
-  shim on Unix, a `node-pty` ConPTY on Windows — behind a backend-agnostic
+  shim on Unix, a prebuilt node-pty ConPTY on Windows — behind a backend-agnostic
   `write`/`terminate` pair), feeds the raw output through `@xterm/headless`,
   debounces, and emits an
   interpreted `ScreenView` on each settled frame. It also queues input until the

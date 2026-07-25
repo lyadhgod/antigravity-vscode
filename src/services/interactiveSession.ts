@@ -31,7 +31,7 @@ import { screenNeedsLogin } from "../core/onboarding";
 import { missingPtyBackendMessage, planLaunch } from "../core/ptyLauncher";
 import { AntigravityConfig } from "../core/types";
 
-/** Minimal shape of the optional native `node-pty` backend used on Windows (#1, #2). */
+/** Minimal shape of the native pty backend used on Windows (#1, #2). */
 interface IPtyLike {
   onData(cb: (data: string) => void): void;
   onExit(cb: (e: { exitCode: number }) => void): void;
@@ -47,17 +47,39 @@ interface NodePtyModule {
 }
 
 /**
- * Lazily loads the optional native `node-pty` backend (Windows ConPTY). It is
- * NOT a hard dependency, so absence returns `undefined` rather than throwing —
- * Unix never reaches here (it uses the `script` shim). `node-pty` is marked
- * external in esbuild so this stays a runtime require, not a bundled module.
+ * Lazily loads the native ConPTY backend used on Windows (Unix never gets here —
+ * it uses the `script` shim). We ship `@lydell/node-pty-win32-<arch>`: prebuilt
+ * Node-API binaries, so they load in any VS Code/Electron version without a
+ * node-gyp rebuild, which is what kept plain `node-pty` unshippable in a VSIX
+ * (#1, #2). A hand-installed `node-pty` is accepted as a fallback. The ids are
+ * required through a variable so esbuild leaves them as runtime requires; a
+ * missing backend returns `undefined` (caller shows the real reason, not "agy
+ * isn't installed").
  */
 function loadNodePty(): NodePtyModule | undefined {
-  try {
-    return require("node-pty") as NodePtyModule;
-  } catch {
-    return undefined;
+  for (const id of [`@lydell/node-pty-win32-${process.arch}`, "node-pty"]) {
+    try {
+      return require(id) as NodePtyModule;
+    } catch {
+      /* try the next backend */
+    }
   }
+  return undefined;
+}
+
+/**
+ * Last meaningful line the process printed, used to explain an exit-before-ready
+ * with the actual cause (e.g. `script: illegal option -- c` on macOS, #3) rather
+ * than the generic "check that agy is installed and you're signed in".
+ */
+function lastOutputLine(raw: string): string | undefined {
+  const lines = raw
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return lines[lines.length - 1];
 }
 
 /** Vertical/horizontal selector orientation (see core/agyScreen.SelectPrompt). */
@@ -235,9 +257,18 @@ export class InteractiveSessionService {
         setTimeout(() => observer.onExit(null, missingPtyBackendMessage()), 0);
         return;
       }
-      const p = nodePty.spawn(plan.command, plan.args, {
-        name: "xterm-256color", cols: plan.cols, rows: plan.rows, cwd: dirs[0], env
-      });
+      let p: IPtyLike;
+      try {
+        p = nodePty.spawn(plan.command, plan.args, {
+          name: "xterm-256color", cols: plan.cols, rows: plan.rows, cwd: dirs[0], env
+        });
+      } catch (err) {
+        // ConPTY refuses to start (typically the binary isn't where we resolved
+        // it). Report that, not the generic "not signed in" (#1, #2).
+        const reason = err instanceof Error ? err.message : String(err);
+        setTimeout(() => observer.onExit(null, `Could not start \`${plan.command}\`: ${reason}`), 0);
+        return;
+      }
       entry.write = (data) => {
         try { p.write(data); } catch { /* pty gone */ }
       };
@@ -255,19 +286,27 @@ export class InteractiveSessionService {
       try { proc.stdin?.write(data); } catch { /* stdin gone */ }
     };
     entry.terminate = () => {
-      try {
-        // The `script` wrapper blocks on a Ctrl+Z'd child and ignores SIGTERM,
-        // so resume it (SIGCONT) and force-terminate (SIGKILL); this reaps both
-        // `script` and `agy` with no orphans (verified against the real CLI).
-        proc.kill("SIGCONT");
-        proc.kill("SIGKILL");
-      } catch { /* already gone */ }
+      // Closing stdin is what actually reaps `agy`: the shim gives it its own
+      // session and it ignores SIGHUP, so signalling the shim alone would orphan
+      // it. EOF ends the shim's forwarding loop, which kills the child by pid
+      // (see core/ptyLauncher.expectScript). The signals are the fallback for a
+      // shim that doesn't act on EOF: SIGCONT first, because the wrapper blocks
+      // on a Ctrl+Z'd child and ignores SIGTERM.
+      try { proc.stdin?.end(); } catch { /* stdin gone */ }
+      setTimeout(() => {
+        try {
+          proc.kill("SIGCONT");
+          proc.kill("SIGKILL");
+        } catch { /* already gone */ }
+      }, SHUTDOWN_GRACE_MS);
     };
     this.live.set(id, entry);
     proc.stdout?.on("data", (buf: Buffer) => feed(buf.toString("utf8")));
     proc.stderr?.on("data", (buf: Buffer) => feed(buf.toString("utf8")));
     proc.on("exit", (code) => this.handleExit(id, code));
-    proc.on("error", () => this.handleExit(id, null));
+    proc.on("error", (err) =>
+      this.handleExit(id, null, `Could not start \`${plan.command}\`: ${err.message}`)
+    );
   }
 
   /** Sends a chat prompt (one logical line) to the agent, queueing if not ready. */
@@ -415,7 +454,11 @@ export class InteractiveSessionService {
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
-    entry.observer.onExit(code, error);
+    // Died before the prompt ever appeared: whatever it printed last is the real
+    // reason (a `script` usage error, a CLI crash), so pass it up instead of
+    // letting the view blame the sign-in state (#3).
+    const tail = entry.ready ? undefined : lastOutputLine(entry.raw);
+    entry.observer.onExit(code, error ?? (tail && `The Antigravity session ended before it was ready: ${tail}`));
   }
 
   private scheduleRender(id: string): void {

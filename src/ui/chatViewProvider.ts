@@ -71,7 +71,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private readonly runtimes = new Map<string, SessionRuntime>();
   /** Sign-in flow state (the hidden `LOGIN_SESSION_ID` session). */
   private loginUrl?: string;
-  private loginUrlOpened = false;
+  /** True once an OAuth URL has been committed to the gate, so later frames don't re-arm the timer. */
+  private loginUrlSurfaced = false;
   /** Most recent screen that looked like the OAuth URL block, kept fresh while `loginUrlTimer` is pending. */
   private loginUrlLines?: string[];
   private loginUrlTimer?: ReturnType<typeof setTimeout>;
@@ -315,10 +316,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Starts (once) the sign-in flow — the gate's "Sign in with Google" button. */
   startLogin(): void {
     if (this.interactive.isRunning(LOGIN_SESSION_ID)) {
+      // Clicked again while a flow is already running — the browser round-trip
+      // takes a while and the button disables itself on click, so this happens
+      // whenever the CLI looks idle for a moment. Never start a second `agy`
+      // (that is the race in refreshState above), but never swallow the click
+      // either: re-surface what the running flow is waiting on, so the webview
+      // ends up in a state its own messages can leave again (#8).
+      this.showLoginMirror();
+      if (this.loginUrl) {
+        this.post({ type: "loginUrl", url: this.loginUrl });
+      }
       return;
     }
     this.resetLoginUrlState();
-    this.loginUrlOpened = false;
+    this.loginUrlSurfaced = false;
     // A previous flow's terminal (kept around by debug mode) is attached to a
     // dead process — drop it so this flow gets a fresh, live one.
     this.loginMirror?.dispose();
@@ -359,7 +370,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // quiet before trusting it, rather than acting on whatever is on screen
       // the moment "http" first appears.
       this.loginUrlLines = lines;
-      if (!this.loginUrlTimer && !this.loginUrlOpened) {
+      if (!this.loginUrlTimer && !this.loginUrlSurfaced) {
         this.loginUrlTimer = setTimeout(() => this.commitLoginUrl(), 1000);
       }
       return;
@@ -376,11 +387,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     this.loginUrl = url;
+    this.loginUrlSurfaced = true;
+    // Deliberately NOT opened here: `agy` runs `open <url>` itself the moment it
+    // paints this screen, so a second launch from us only added a redundant "open
+    // the external website?" prompt for a page the CLI had already opened. The
+    // gate's Open button still routes through vscode.env.openExternal for anyone
+    // whose CLI auto-open didn't work.
     this.post({ type: "loginUrl", url });
-    if (!this.loginUrlOpened) {
-      this.loginUrlOpened = true;
-      void vscode.env.openExternal(vscode.Uri.parse(url));
-    }
   }
 
   /** The sign-in session reached the CLI's normal ready prompt — done. */
@@ -426,6 +439,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Re-probes the CLI and pushes readiness; when ready, also sends the list. */
   async refreshState(): Promise<void> {
+    // A sign-in flow owns the CLI right now, so don't re-probe (#8). The probe
+    // launches a SECOND `agy` (see interactiveSession.probeAuth) which races the
+    // live one for the same credential store and hangs the sign-in — and this is
+    // not a rare race: the OAuth step opens the external browser, so coming back
+    // to the editor fires onDidChangeVisibility → refreshState on EVERY attempt.
+    // Skipping the whole method also keeps the gate card intact: the "checking"
+    // skeleton it posts would swap the card out and back, and the return trip
+    // clears the OAuth URL row and whatever code was typed into it.
+    // finishLogin()/onLoginExit() refresh the state when the flow ends, so
+    // nothing is lost by dropping this one.
+    if (this.interactive.isRunning(LOGIN_SESSION_ID)) {
+      return;
+    }
     const config = this.cli.getConfig();
     const defaults = { sandbox: config.sandbox, skipPermissions: config.skipPermissions };
     // The auth check launches the CLI and waits to see whether it asks for a

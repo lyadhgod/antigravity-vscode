@@ -38,6 +38,9 @@ const STORE_KEY = "antigravity.sessions.v1";
 /** Id of the hidden interactive session driving the in-GUI sign-in flow (never added to the session store/list). */
 const LOGIN_SESSION_ID = "__login__";
 
+/** How long an unrecognized screen must sit unchanged before we reveal the CLI. */
+const STUCK_REVEAL_MS = 5000;
+
 /** Per-session live state held while its interactive process runs. */
 interface SessionRuntime {
   /** The prompt awaiting a reply, or undefined when no turn is in flight. */
@@ -78,6 +81,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private loginUrlTimer?: ReturnType<typeof setTimeout>;
   private loginMirror?: vscode.Terminal;
   private loginMirrorDismissed = false;
+  /** Pending "screen is stuck on something we don't recognize" timers, by session id. */
+  private readonly stuckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -291,6 +296,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     rt.mirror.show();
   }
 
+  /**
+   * Fallback for a screen we don't know how to drive (either flow): when a frame
+   * matches none of the patterns we automate and then sits unchanged for
+   * {@link STUCK_REVEAL_MS}, reveal the mirror terminal so the user can act on it
+   * themselves — regardless of `antigravity.debug`, and even if they had closed a
+   * mirror earlier. Frames only arrive when the rendered screen actually changed
+   * (see interactiveSession.render), so "no further frame" *is* "unchanged"; a
+   * recognized frame just disarms the timer.
+   */
+  private watchStuck(id: string, recognized: boolean): void {
+    clearTimeout(this.stuckTimers.get(id));
+    this.stuckTimers.delete(id);
+    if (recognized) {
+      return;
+    }
+    this.stuckTimers.set(
+      id,
+      setTimeout(() => {
+        this.stuckTimers.delete(id);
+        this.revealCli(id);
+      }, STUCK_REVEAL_MS)
+    );
+  }
+
+  /** Force-shows a session's mirror terminal (clearing a previous dismissal). */
+  private revealCli(id: string): void {
+    if (!this.interactive.isRunning(id)) {
+      return; // the process died while we waited — nothing left to mirror
+    }
+    if (id === LOGIN_SESSION_ID) {
+      this.loginMirrorDismissed = false;
+      this.showLoginMirror();
+      return;
+    }
+    const rt = this.runtimes.get(id);
+    if (rt) {
+      rt.mirrorDismissed = false;
+      this.showMirror(id, rt);
+    }
+  }
+
   /** Wires a Pseudoterminal mirroring the given interactive session's raw PTY output. */
   private createMirror(id: string, name: string): vscode.Terminal {
     const writer = new vscode.EventEmitter<string>();
@@ -346,6 +392,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Handles one settled screen frame from the sign-in session. */
   private onLoginScreen(view: ScreenView, lines: string[]): void {
+    this.watchStuck(LOGIN_SESSION_ID, this.driveLogin(view, lines));
+  }
+
+  /**
+   * Acts on one sign-in frame; returns whether it matched a screen we know how to
+   * drive (an unrecognized one that then stalls surfaces the CLI, see watchStuck).
+   */
+  private driveLogin(view: ScreenView, lines: string[]): boolean {
     const prompt = view.prompt;
     if (prompt) {
       const oauthIndex = prompt.options.findIndex((o) => /oauth/i.test(o.label));
@@ -354,14 +408,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else if (/color scheme/i.test(prompt.title)) {
         // Accept the default (already-selected) scheme — just confirm it.
         this.interactive.selectOption(LOGIN_SESSION_ID, prompt.selectedIndex, prompt.selectedIndex, prompt.layout);
+      } else {
+        // An unrecognized selector (e.g. the undocumented consent confirmation)
+        // — nothing to automate; the user drives it in the revealed terminal.
+        return false;
       }
-      // else: an unrecognized selector (the undocumented consent confirmation)
-      // — the mirror terminal is already visible, so the user can drive it directly.
-      return;
+      return true;
     }
     if (view.state === "idle") {
       this.finishLogin();
-      return;
+      return true;
     }
     if (findUrl(lines)) {
       // The URL block paints over more than one settled frame (each on its own
@@ -373,10 +429,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!this.loginUrlTimer && !this.loginUrlSurfaced) {
         this.loginUrlTimer = setTimeout(() => this.commitLoginUrl(), 1000);
       }
-      return;
+      return true;
     }
-    // else: an unrecognized screen — nothing to automate, the visible mirror
-    // terminal already lets the user act on it directly.
+    return false; // an unrecognized screen — nothing to automate
   }
 
   /** Reads whatever the sign-in screen settled on ~1s after the URL first appeared. */
@@ -696,6 +751,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (view.ready || view.state === "idle" || view.state === "generating" || view.state === "prompt") {
       rt.readyOnce = true;
     }
+    // Anything that isn't one of the run states we render (i.e. still "starting"
+    // with no input box painted) is a screen we can't drive — if it then sits
+    // there, reveal the CLI so the user can (see watchStuck).
+    this.watchStuck(sessionId, view.ready || view.state !== "starting");
     // The CLI is asking to sign in mid-session — the credential expired or was
     // revoked. Sessions all share the one account, so none of them can continue.
     if (screenNeedsLogin(view)) {

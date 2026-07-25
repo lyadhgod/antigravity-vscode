@@ -86,7 +86,6 @@ the OS keychain counts. **Sign out** runs the CLI's `/logout`.
 | Setting | Default | Description |
 | --- | --- | --- |
 | `antigravity.cliPath` | `agy` | Binary name (resolved on `PATH`) or an absolute path. |
-| `antigravity.extraArgs` | `[]` | Extra args appended to every invocation. |
 | `antigravity.skipPermissions` | `false` | Pass `--dangerously-skip-permissions` (auto‑approve all tool actions). |
 | `antigravity.sandbox` | `false` | Pass `--sandbox` (terminal restrictions). |
 | `antigravity.autoAddWorkspaceFolders` | `true` | Add the *extra* roots of a multi‑root workspace via `--add-dir` (the primary folder is the working dir and is always visible). |

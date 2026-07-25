@@ -44,14 +44,6 @@
           "default": "agy",
           "markdownDescription": "Path to the Antigravity CLI binary. Leave as `agy` to resolve it from your `PATH`, or set an absolute path (e.g. `~/.local/bin/agy`)."
         },
-        "antigravity.extraArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Additional command-line arguments appended to every agy invocation."
-        },
         "antigravity.skipPermissions": {
           "type": "boolean",
           "default": false,

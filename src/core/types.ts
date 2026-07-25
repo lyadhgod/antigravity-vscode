@@ -17,8 +17,6 @@
 export interface AntigravityConfig {
   /** Path or bare command name for the CLI binary (default `"agy"`). */
   cliPath: string;
-  /** Extra arguments appended verbatim to every invocation. */
-  extraArgs: string[];
   /** Whether to pass `--dangerously-skip-permissions`. */
   skipPermissions: boolean;
   /** Whether to pass `--sandbox` (terminal restrictions). */

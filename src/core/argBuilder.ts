@@ -14,8 +14,8 @@ import { AntigravityConfig, SessionOptions } from "./types";
 
 /**
  * Appends flags common to model-driven invocations: workspace directories,
- * sandbox, permission-skipping, and any user `extraArgs`. Mutates and returns
- * `args` for ergonomic chaining.
+ * sandbox, and permission-skipping. Mutates and returns `args` for ergonomic
+ * chaining.
  */
 function applyCommonFlags(args: string[], config: AntigravityConfig, addDirs?: string[]): string[] {
   for (const dir of addDirs ?? []) {
@@ -26,9 +26,6 @@ function applyCommonFlags(args: string[], config: AntigravityConfig, addDirs?: s
   }
   if (config.skipPermissions) {
     args.push("--dangerously-skip-permissions");
-  }
-  if (config.extraArgs.length > 0) {
-    args.push(...config.extraArgs);
   }
   return args;
 }

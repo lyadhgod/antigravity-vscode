@@ -26,7 +26,6 @@ export class CliService {
     const c = vscode.workspace.getConfiguration("antigravity");
     return {
       cliPath: c.get<string>("cliPath", "agy"),
-      extraArgs: c.get<string[]>("extraArgs", []),
       skipPermissions: c.get<boolean>("skipPermissions", false),
       sandbox: c.get<boolean>("sandbox", false),
       autoAddWorkspaceFolders: c.get<boolean>("autoAddWorkspaceFolders", true)

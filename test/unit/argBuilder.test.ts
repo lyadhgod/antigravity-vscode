@@ -13,7 +13,6 @@ import { AntigravityConfig } from "../../src/core/types";
 function config(overrides: Partial<AntigravityConfig> = {}): AntigravityConfig {
   return {
     cliPath: "agy",
-    extraArgs: [],
     skipPermissions: false,
     sandbox: false,
     autoAddWorkspaceFolders: true,
@@ -26,15 +25,14 @@ describe("argBuilder.buildSessionArgs", () => {
     assert.deepStrictEqual(buildSessionArgs({}, config()), []);
   });
 
-  it("adds add-dir (repeatable), sandbox, skip-permissions, and extra args", () => {
+  it("adds add-dir (repeatable), sandbox, and skip-permissions", () => {
     const args = buildSessionArgs(
       { addDirs: ["/a", "/b"] },
-      config({ sandbox: true, skipPermissions: true, extraArgs: ["--log-file", "x.log"] })
+      config({ sandbox: true, skipPermissions: true })
     );
     assert.strictEqual(args.filter((a) => a === "--add-dir").length, 2);
     assert.ok(args.includes("--sandbox"));
     assert.ok(args.includes("--dangerously-skip-permissions"));
-    assert.ok(args.includes("--log-file"));
   });
 
   it("NEVER emits --model or --output-format (the real CLI rejects them)", () => {

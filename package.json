@@ -2,7 +2,7 @@
   "name": "antigravity-vscode",
   "displayName": "Antigravity for VS Code",
   "description": "Bring Google's Antigravity CLI (agy) into VS Code: an agentic coding companion with a Material 3 Expressive chat UI, a slash-command navigator, interactive sessions with in-chat option pickers, and Google sign-in.",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "license": "MIT",
   "publisher": "lyadhgod",
   "engines": {

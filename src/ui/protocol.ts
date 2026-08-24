@@ -54,9 +54,19 @@ export type HostToWebview =
   | { type: "sessions"; sessions: SessionSummary[] }
   | { type: "openSession"; id: string; title: string; messages: ChatMessage[] }
   | { type: "userMessage"; text: string }
+  /** A turn just started — show a fresh live CLI-output window (replaces the old bare spinner). */
   | { type: "streamStart" }
+  /**
+   * Raw text of the turn currently in flight (tool calls, their output,
+   * progress lines, and prose — {@link agyScreen.ScreenView.liveLog}), for the
+   * live terminal-style window. Full replace, like `assistantText`. A blocking
+   * `prompt` freezes the window this arrived in; the next `cliOutput` after
+   * `promptEnd` starts a new one underneath it.
+   */
+  | { type: "cliOutput"; text: string }
   /** Replaces the in-progress assistant bubble with the full current reply. */
   | { type: "assistantText"; text: string }
+  /** The turn is over — the live CLI-output window from it freezes in place (it stays visible) alongside the reply. */
   | { type: "streamEnd"; ok: boolean; timedOut: boolean }
   | { type: "system"; text: string }
   | { type: "busy"; value: boolean }

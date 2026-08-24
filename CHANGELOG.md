@@ -79,6 +79,14 @@ real `agy` TUI end-to-end.
 
 ### Changed
 
+- **Waiting on a reply now shows what the CLI is doing, not a bare spinner
+  (#raw-cli).** A small, scrolling, terminal-styled window under your message
+  mirrors the live `agy` screen — tool calls, their output, progress lines,
+  and the working spinner — while a turn is in flight. An option selector (a
+  radio/checkbox prompt) freezes that window in place and a new one picks up
+  once it's answered, so the sequence stays visible for as long as the turn
+  runs; each window is then left in the transcript once it's done, as a
+  record of what actually happened, rather than being cleared away.
 - Option cards parse an inline `(current)` marker and secondary description
   (seen on `/model`, `/permissions`, `/hooks`) into a bold name, a "current"
   badge, and muted description text.

@@ -49,8 +49,14 @@
   const state = {
     ready: false,
     busy: false,
-    /** @type {{body:HTMLElement, text:string, loading:boolean}|null} */
+    /** @type {{body:HTMLElement, text:string}|null} */
     current: null,
+    // Live CLI output while a turn is in flight (#raw-cli): the window still
+    // being updated, or null once frozen (by a prompt card, or because nothing
+    // is in flight). Frozen windows are left in the transcript as permanent
+    // history — they're never removed.
+    /** @type {{wrap:HTMLElement, pre:HTMLElement}|null} */
+    liveCli: null,
     catalog: [],
     matches: [],
     /** @type {HTMLElement[]} */
@@ -183,7 +189,8 @@
   }
 
   function renderHistory(messages) {
-    transcript.innerHTML = ""; state.current = null; clearPrompt(); clearWriteIn();
+    transcript.innerHTML = ""; state.current = null; state.liveCli = null;
+    clearPrompt(); clearWriteIn();
     for (const msg of messages) {
       const kind = msg.role === "user" ? "user" : msg.role === "system" ? "system" : "assistant";
       addMessage(kind, kind === "assistant" ? renderAssistant(msg.text) : renderMarkdown(msg.text));
@@ -249,43 +256,81 @@
   });
   window.addEventListener("resize", () => updatePinned());
 
+  // The final assistant bubble — created once the clean reply actually lands,
+  // never while still generating (see the CLI-output windows below for that).
   function beginAssistant() {
     const wrap = el("div", "msg msg--assistant");
     const body = el("div");
-    body.innerHTML = loaderSvg(30); // M3 Expressive loading indicator
     wrap.appendChild(body); transcript.appendChild(wrap);
-    state.current = { wrap, body, text: "", loading: true };
-    dropStrayLoaders(); scrollToBottom();
+    state.current = { wrap, body, text: "" };
+    scrollToBottom();
   }
 
   // Strictly reconcile the transcript's loading indicators with the live state:
   // a loader may ONLY exist while a turn is in flight (busy/working) and ONLY on
   // the current bubble. Once nothing is in flight, every loader is removed — so a
-  // finished turn can never leave a spinner (or an empty "loading" bubble)
-  // behind. (Session-list + #bgtask loaders live outside the transcript.)
+  // finished turn can never leave a spinner behind. (Session-list + #bgtask
+  // loaders live outside the transcript.)
   function dropStrayLoaders() {
     const keep = (state.busy || state.working) && state.current ? state.current.wrap : null;
     // Trailing "working" spinners baked into bubbles by paintAssistant.
     transcript.querySelectorAll(".msg__working").forEach((s) => {
       if (!keep || !keep.contains(s)) s.remove();
     });
-    // Orphaned "loading" bubbles (just a big loader, no text yet).
-    transcript.querySelectorAll(".msg--assistant").forEach((wrap) => {
-      if (wrap === keep) return;
-      if (wrap.querySelector(".m3-loader") && wrap.textContent.trim() === "") wrap.remove();
-    });
+  }
+
+  // ===========================================================================
+  //  Live CLI output (raw terminal-style text while a turn is in flight)
+  // ===========================================================================
+  // Waiting on a reply used to show a bare spinner. Instead, mirror the CLI's
+  // own screen — tool calls, their output, progress lines — into a small,
+  // scrolling, terminal-styled window right under the input, so the wait shows
+  // what the CLI is actually doing. A blocking option selector (a radio/
+  // checkbox menu) is itself an intermediate step: it freezes the current
+  // window in place and a new one starts once it's answered, so the sequence
+  // (window → menu → window → …) stays visible as the turn plays out. Once a
+  // window is frozen — a selector took over, or the turn ended — it is left in
+  // the transcript for good: these are a record of what the CLI actually did,
+  // not a throwaway loader (#raw-cli).
+  function newCliWindow() {
+    const wrap = el("div", "clilog clilog--live");
+    const dot = el("div", "clilog__dot");
+    const pre = el("pre", "clilog__body");
+    wrap.append(dot, pre);
+    transcript.appendChild(wrap);
+    const win = { wrap, pre };
+    state.liveCli = win;
+    scrollToBottom();
+    return win;
+  }
+  // A brand-new turn started. Any earlier turn's window should already be
+  // frozen (endAssistant/interrupt do that) — freezing again here is just a
+  // defensive no-op — then a fresh window opens after it, never replacing it.
+  function beginCliOutput() {
+    freezeCliWindow();
+    newCliWindow();
+  }
+  function setCliOutput(text) {
+    const win = state.liveCli || newCliWindow();
+    // An empty string is a real, if uncommon, state (nothing has rendered for
+    // this turn yet) — clilog__body:empty (CSS) shows a placeholder for it, so
+    // the window is never just a bare pulsating dot.
+    win.pre.textContent = text;
+    win.pre.scrollTop = win.pre.scrollHeight; // pin to the newest (bottom) line
+    scrollToBottom();
+  }
+  // The live window's content is final — a selector took over, or the turn
+  // ended. Stop pulsing it and detach it from further updates, but leave it in
+  // the transcript; the next cliOutput (a resumed turn, or a new one) opens a
+  // fresh window rather than reusing or clearing this one.
+  function freezeCliWindow() {
+    if (state.liveCli) state.liveCli.wrap.classList.remove("clilog--live");
+    state.liveCli = null;
   }
 
   // ===========================================================================
   //  Option selector intercepted from the live TUI
   // ===========================================================================
-  // A still-empty assistant bubble (just the spinner) is dropped so the option
-  // card reads cleanly; any already-streamed text stays put.
-  function dropEmptyLoader() {
-    if (state.current && state.current.loading && state.current.wrap) {
-      state.current.wrap.remove(); state.current = null;
-    }
-  }
   function clearPrompt() {
     if (state.promptEl) { state.promptEl.remove(); state.promptEl = null; }
     state.awaitingPrompt = false; document.body.classList.remove("awaiting-prompt"); refreshLock();
@@ -421,7 +466,7 @@
     // same options (e.g. back-to-back "Yes/No" permission prompts) — is a fresh
     // selector and must be rebuilt clickable, not reuse the disabled card.
     if (state.promptEl && state.promptSig === promptSig(p) && !state.promptEl.dataset.done) { syncPrompt(p); return; }
-    clearPrompt(); dropEmptyLoader();
+    clearPrompt(); freezeCliWindow();
     const card = el("div", "prompt prompt--" + (p.layout === "horizontal" ? "horizontal" : "vertical") + (p.multi ? " prompt--multi" : ""));
     card.tabIndex = 0; card.setAttribute("role", p.multi ? "group" : "listbox");
     card.setAttribute("aria-label", p.title || "Choose an option");
@@ -458,13 +503,17 @@
     dropStrayLoaders(); // never leave an older bubble's loader showing too
   }
   function setAssistant(text) {
+    if (!text) return;
     if (!state.current) beginAssistant();
-    const c = state.current; if (!text) return;
-    c.loading = false; c.text = text; paintAssistant(c); scrollToBottom();
+    const c = state.current;
+    c.text = text; paintAssistant(c); scrollToBottom();
   }
   function endAssistant(ok, timedOut) {
-    const c = state.current;
-    if (c) { if (c.loading) c.body.innerHTML = timedOut ? "<em>(request timed out)</em>" : "<em>(no output)</em>"; state.current = null; }
+    freezeCliWindow(); // done, but stays visible — a record of what the CLI did
+    if (!state.current) {
+      addMessage("assistant", timedOut ? "<em>(request timed out)</em>" : "<em>(no output)</em>");
+    }
+    state.current = null;
     dropStrayLoaders(); // a finished turn must not keep a trailing spinner
     if (!ok && !timedOut) addMessage("error", "The agent exited with an error.");
     updatePinned();
@@ -523,7 +572,7 @@
   function setBusy(busy) {
     state.busy = busy; refreshLock();
     const c = state.current; // add/remove the trailing "still working" spinner
-    if (c && !c.loading && c.text) paintAssistant(c);
+    if (c && c.text) paintAssistant(c);
     dropStrayLoaders(); // when no longer busy, strip any lingering loader
   }
   // A spinner or /tasks background task is (in)active — a non-blocking loader:
@@ -533,7 +582,7 @@
   function setWorking(w) {
     state.working = w;
     const c = state.current;
-    if (c && !c.loading && c.text) paintAssistant(c);
+    if (c && c.text) paintAssistant(c);
     // The chip is the loader ONLY when there's no active turn bubble to host the
     // trailing spinner (e.g. a dev server left running after the turn finished) —
     // otherwise we'd show two loaders at once.
@@ -560,13 +609,14 @@
       state.reflected = text;
     }
   }
-  // Stop always fully interrupts (#6/#7): discard the in-progress message UI — an
-  // empty loader bubble and any selector card — keep text that already streamed,
-  // then tell the host to cancel the CLI act.
+  // Stop always fully interrupts (#6/#7): discard any selector card, freeze
+  // the live CLI-output window in place (it stays as a record of what ran
+  // before the cancel), then tell the host to cancel the CLI act.
+  // `state.current` only ever holds the FINAL bubble, which doesn't exist yet
+  // mid-turn, so there's no partial text to preserve here.
   function interrupt() {
-    clearPrompt(); clearWriteIn();
-    const c = state.current;
-    if (c) { if (c.loading && c.wrap) c.wrap.remove(); state.current = null; }
+    clearPrompt(); clearWriteIn(); freezeCliWindow();
+    state.current = null;
     state.busy = false; refreshLock();
     vscode.postMessage({ type: "cancel" });
   }
@@ -699,6 +749,7 @@
     state.rechecking = false;
     clearPrompt(); setBusy(false); setWorking(false);
     transcript.innerHTML = ""; state.current = null;
+    state.liveCli = null;
     setView("gate");
     resetGateCard();
     const alert = $("gate-alert");
@@ -797,7 +848,8 @@
         break;
       case "openSession": renderHistory(msg.messages); setView("chat"); input.focus(); updatePinned(); break;
       case "userMessage": addMessage("user", renderMarkdown(msg.text)); break;
-      case "streamStart": if (!state.current) beginAssistant(); break;
+      case "streamStart": beginCliOutput(); break;
+      case "cliOutput": setCliOutput(msg.text); break;
       case "assistantText": setAssistant(msg.text); break;
       case "streamEnd": endAssistant(msg.ok, msg.timedOut); break;
       case "busy": setBusy(msg.value); break;

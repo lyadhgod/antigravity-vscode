@@ -25,7 +25,7 @@ describe("onboarding.decideOnboarding", () => {
 });
 
 describe("onboarding.screenNeedsLogin", () => {
-  const view = (v: Partial<ScreenView>): ScreenView => ({ state: "starting", turns: [], ...v });
+  const view = (v: Partial<ScreenView>): ScreenView => ({ state: "starting", turns: [], liveLog: "", ...v });
   const selector = (title: string, labels: string[]) => ({
     title,
     context: "",

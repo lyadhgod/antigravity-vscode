@@ -104,6 +104,17 @@ export interface ScreenView {
    * early (which truncated replies / desynced later turns).
    */
   ready?: boolean;
+  /**
+   * Raw text of the turn currently in flight — the CLI's tool calls, their
+   * output, and progress lines exactly as rendered, plus assistant prose,
+   * still indented (unlike {@link Turn.assistant}, nothing here is stripped or
+   * cleaned up). Meant for a live, terminal-style view while a reply is being
+   * generated, so waiting on it shows what the CLI is actually doing instead
+   * of a bare spinner. Scoped to the most recent user echo (or the whole
+   * screen, for a long reply whose echo has scrolled off — see
+   * `GENERATING_SCROLLED` in the tests); `""` once nothing is in flight.
+   */
+  liveLog: string;
 }
 
 // Braille block — the spinner glyphs ⣾⣷⣯⣟⡿⢿⣻⣽ live here.
@@ -444,6 +455,21 @@ export function interpretScreen(rawLines: string[]): ScreenView {
   const turns: Turn[] = [];
   let cur: Turn | undefined;
   let skipping = false; // inside a tool-output block (consume wrapped lines)
+  let skippingNoise = false; // the block being skipped is hidden noise, not real tool output
+
+  // The most recent user echo bounds the in-flight turn: `liveLog` (below)
+  // only captures rows after it. A reply long enough to scroll its echo off
+  // screen (GENERATING_SCROLLED) has none, so the whole body counts as live.
+  let lastEchoIdx = -1;
+  for (let bi = 0; bi < bodyTop; bi++) {
+    if (inputBox && bi === inputBox.idx) {
+      continue;
+    }
+    if (isUserEcho(lines[bi].trim())) {
+      lastEchoIdx = bi;
+    }
+  }
+  const liveLog: string[] = [];
 
   for (let bi = 0; bi < bodyTop; bi++) {
     if (inputBox && bi === inputBox.idx) {
@@ -451,26 +477,60 @@ export function interpretScreen(rawLines: string[]): ScreenView {
     }
     const raw = lines[bi];
     const t = raw.trim();
+    const live = bi > lastEchoIdx; // belongs to the turn in flight right now
     if (t === "") {
       skipping = false;
       if (cur && cur.assistant) {
         cur.assistant += "\n";
       }
+      if (live) {
+        liveLog.push("");
+      }
       continue;
     }
-    if (isBanner(t) || isRule(t) || isStatus(t) || isSpinner(t) || isTaskHint(t) || isEmptyPrompt(t)) {
+    if (BRAILLE.test(t)) {
+      // A literal spinner glyph always means "the CLI is doing something right
+      // now" — surface that line verbatim no matter what else it carries (even
+      // the bottom status bar, if a frame ever merges them), so the live view
+      // is never left showing nothing while the CLI is actively working.
       skipping = false;
+      if (live) {
+        liveLog.push(raw.replace(/\s+$/, ""));
+      }
+      continue;
+    }
+    if (isBanner(t) || isRule(t) || isStatus(t) || isTaskHint(t) || isEmptyPrompt(t)) {
+      skipping = false;
+      continue;
+    }
+    if (isSpinner(t)) {
+      // Chrome for the clean reply, but exactly the "still working" signal the
+      // live raw view exists to show — keep it there.
+      skipping = false;
+      if (live) {
+        liveLog.push(raw.replace(/\s+$/, ""));
+      }
       continue;
     }
     if (isToolCall(t)) {
       skipping = false; // a new tool bullet ends the prior tool's output block
+      if (live) {
+        liveLog.push(raw.replace(/\s+$/, ""));
+      }
       continue; // the bullet itself is a tool invocation, not assistant prose
     }
     if (isNoise(t) || isToolOut(t)) {
       skipping = true; // this line + its wrapped continuation belong to a tool
+      skippingNoise = isNoise(t); // real tool output is kept live; noise never is
+      if (live && !skippingNoise) {
+        liveLog.push(raw.replace(/\s+$/, ""));
+      }
       continue;
     }
     if (skipping) {
+      if (live && !skippingNoise) {
+        liveLog.push(raw.replace(/\s+$/, ""));
+      }
       continue;
     }
     if (isUserEcho(t)) {
@@ -492,6 +552,9 @@ export function interpretScreen(rawLines: string[]): ScreenView {
       turns.push(cur);
     }
     cur.assistant += (cur.assistant ? "\n" : "") + deindent(raw);
+    if (live) {
+      liveLog.push(raw.replace(/\s+$/, ""));
+    }
   }
 
   for (const turn of turns) {
@@ -503,7 +566,15 @@ export function interpretScreen(rawLines: string[]): ScreenView {
   // ended-before-ready guard even when the status wording differs (#5), without
   // making a mid-turn frame look "idle".
   const ready = !!inputBox && state !== "signin";
-  return { state, turns, prompt: selector?.prompt, input: inputBox?.text, working, ready };
+  // Collapse blank-line runs and strip leading/trailing blank lines only — a
+  // plain .trim() would also eat the first content line's meaningful leading
+  // indentation whenever it lands at the very start of the string.
+  const liveLogText = liveLog
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "");
+  return { state, turns, prompt: selector?.prompt, input: inputBox?.text, working, ready, liveLog: liveLogText };
 }
 
 /**

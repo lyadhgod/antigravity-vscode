@@ -53,6 +53,13 @@ interface SessionRuntime {
   readyOnce: boolean;
   /** True while the TUI is blocking on an option selector we've surfaced. */
   promptActive: boolean;
+  /**
+   * The `liveLog` text already handed to a now-frozen live-output window
+   * (right before the most recent selector), so the window that resumes after
+   * it is answered gets only what's new — see {@link onScreen}. `undefined`
+   * before the first freeze of the current turn.
+   */
+  liveLogFlushed?: string;
   /** Last `>` input-box text seen, to push only changes to the webview (#9). */
   lastInput?: string;
   /** Last working/background-task flag pushed to the webview. */
@@ -195,6 +202,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       rt.pending = undefined;
       rt.promptActive = false;
+      rt.liveLogFlushed = undefined;
     }
     this.post({ type: "promptEnd" });
     this.post({ type: "busy", value: false });
@@ -246,6 +254,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
     return "";
+  }
+
+  /**
+   * The portion of a turn's raw `liveLog` not yet shown in a frozen live
+   * window — i.e. everything since the point we last handed off to an option
+   * selector. `flushed` is exactly the text sent right before that freeze, so
+   * stripping it as a prefix recovers just the new window's content; old
+   * scrollback rows don't get rewritten, so `full` should always start with
+   * it, but if that assumption ever breaks we fall back to the whole log
+   * rather than showing nothing.
+   */
+  private sinceFlush(full: string, flushed: string | undefined): string {
+    if (!flushed) {
+      return full;
+    }
+    return full.startsWith(flushed) ? full.slice(flushed.length).replace(/^\n+/, "") : full;
   }
 
   /** Runs `fn` with the active session and its current on-screen selector, if any. */
@@ -632,23 +656,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.activeSessionId = id;
     this.post({ type: "openSession", id: session.id, title: session.title, messages: session.messages });
 
-    // Restore the live state when reopening. If the session is blocking on a
-    // selector, replay that (clickable options); otherwise, if a turn is still
-    // in flight, re-show the stop button + loader and the reply scraped so far.
+    // Restore the live state when reopening. The transcript was just rebuilt
+    // from scratch, so — unlike the live onScreen path — everything posted
+    // here is a FULL value, never a delta off `liveLogFlushed`.
+    // If the session is blocking on a selector, replay the raw output frozen
+    // just before it (if any), then the clickable options.
     const rt = this.runtimes.get(id);
     if (rt?.promptActive && rt.lastView?.prompt) {
       this.post({ type: "busy", value: false });
+      if (rt.liveLogFlushed) {
+        this.post({ type: "cliOutput", text: rt.liveLogFlushed });
+      }
       this.post({ type: "prompt", prompt: rt.lastView.prompt });
       return;
     }
+    // Otherwise, if a turn is still in flight, resume the live output window
+    // with everything captured so far — and re-baseline the flush point to
+    // match, so the next onScreen tick's delta lines up with what's now shown.
     const live = rt?.pending !== undefined;
     this.post({ type: "busy", value: live });
     if (live && rt) {
-      this.post({ type: "streamStart" });
-      const reply = rt.lastView ? replyFor(rt.lastView, rt.pending!) : "";
-      if (reply) {
-        this.post({ type: "assistantText", text: reply });
-      }
+      const log = rt.lastView?.liveLog ?? "";
+      rt.liveLogFlushed = log;
+      this.post({ type: "cliOutput", text: log });
     }
   }
 
@@ -706,6 +736,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.store.addMessage(sessionId, { role: "user", text: prompt });
     const rt = this.ensureProcess(sessionId);
     rt.pending = prompt;
+    rt.liveLogFlushed = undefined;
 
     if (this.activeSessionId === sessionId) {
       this.post({ type: "userMessage", text: prompt });
@@ -763,15 +794,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const active = this.activeSessionId === sessionId;
 
-    // The TUI is blocking on an option selector: surface it as clickable choices.
-    // First flush any prose ABOVE the selector (e.g. a permission prompt's
-    // "Requesting permission for: <cmd>" context) so it isn't lost, then the card.
+    // The TUI is blocking on an option selector: surface it as clickable
+    // choices. The in-flight turn's raw output (tool calls, output, prose —
+    // see `liveLog`) up to here is final, since the selector's own framing
+    // starts right where it left off — flush it to the live window, freeze
+    // that window by remembering how much of the log it now covers, then hand
+    // off to the card. The window that resumes once it's answered starts
+    // fresh underneath it (#raw-cli).
     if (view.state === "prompt" && view.prompt) {
+      if (active && rt.pending !== undefined) {
+        this.post({ type: "cliOutput", text: this.sinceFlush(view.liveLog, rt.liveLogFlushed) });
+      }
+      rt.liveLogFlushed = view.liveLog;
       if (active) {
-        const lead = rt.pending !== undefined ? this.liveReply(view, rt.pending) : (view.turns[view.turns.length - 1]?.assistant ?? "");
-        if (lead) {
-          this.post({ type: "assistantText", text: lead });
-        }
         this.post({ type: "prompt", prompt: view.prompt });
       }
       rt.promptActive = true;
@@ -780,39 +815,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     // The selector was just answered/dismissed — clear the card. If a turn is
-    // still in flight, the agent goes back to "loading"; re-show that streaming
-    // state in the chat (the empty loader bubble was dropped for the card) (#4).
+    // still in flight, a fresh live-output window resumes underneath it (#4).
     if (rt.promptActive) {
       rt.promptActive = false;
       if (active) {
         this.post({ type: "promptEnd" });
         if (rt.pending !== undefined && view.state !== "idle") {
-          this.post({ type: "busy", value: true });
-          this.post({ type: "streamStart" });
+          this.post({ type: "cliOutput", text: this.sinceFlush(view.liveLog, rt.liveLogFlushed) });
         }
       }
     }
 
     if (rt.pending !== undefined) {
-      const reply = this.liveReply(view, rt.pending);
-      if (active && reply) {
-        this.post({ type: "assistantText", text: reply });
-      }
-      // A turn completes when the agent returns to idle after generating (or
-      // after we answered a selector it had popped, e.g. `/model`).
-      const finished =
-        view.state === "idle" && (reply !== "" || rt.lastState === "generating" || rt.lastState === "prompt");
-      if (finished) {
-        this.store.addMessage(sessionId, { role: "assistant", text: reply || "_(no reply)_" });
+      if (view.state !== "idle") {
+        // Still working: stream the raw log into the live window instead of a
+        // bare spinner, so waiting on a reply shows what the CLI is doing.
         if (active) {
-          if (reply) {
-            this.post({ type: "assistantText", text: reply });
-          }
-          this.post({ type: "streamEnd", ok: true, timedOut: false });
-          this.post({ type: "busy", value: false });
+          this.post({ type: "cliOutput", text: this.sinceFlush(view.liveLog, rt.liveLogFlushed) });
         }
-        rt.pending = undefined;
-        this.sendSessions();
+      } else {
+        const reply = this.liveReply(view, rt.pending);
+        // A turn completes when the agent returns to idle after generating (or
+        // after we answered a selector it had popped, e.g. `/model`).
+        const finished = reply !== "" || rt.lastState === "generating" || rt.lastState === "prompt";
+        if (finished) {
+          this.store.addMessage(sessionId, { role: "assistant", text: reply || "_(no reply)_" });
+          if (active) {
+            if (reply) {
+              this.post({ type: "assistantText", text: reply });
+            }
+            this.post({ type: "streamEnd", ok: true, timedOut: false });
+            this.post({ type: "busy", value: false });
+          }
+          rt.pending = undefined;
+          rt.liveLogFlushed = undefined;
+          this.sendSessions();
+        }
       }
     }
 

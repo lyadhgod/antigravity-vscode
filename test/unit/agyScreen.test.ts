@@ -522,6 +522,60 @@ describe("agyScreen.interpretScreen — turns", () => {
   });
 });
 
+describe("agyScreen.interpretScreen — liveLog", () => {
+  it("captures the in-flight turn's tool call, output, prose, and spinner verbatim", () => {
+    const view = interpretScreen(IDLE_WITH_TOOL);
+    assert.strictEqual(
+      view.liveLog,
+      "● ListDir(/workspace) (ctrl+o to expand)\n\n" +
+        "  Hello! How can I help you today with your VS Code extension codebase? Let me know if you want\n" +
+        "  to explore the files, run tests, or implement a new feature."
+    );
+    // The eligibility-check noise stays hidden, same as in the clean turn text.
+    assert.ok(!/Eligibility|googleusercontent/.test(view.liveLog));
+  });
+
+  it("shows the current progress line but not the generic /tasks tip", () => {
+    const view = interpretScreen(GENERATING);
+    assert.strictEqual(view.liveLog, "  ONEONE\n⣽ Generating...");
+  });
+
+  it("falls back to the whole screen when the echo has scrolled off", () => {
+    const view = interpretScreen(GENERATING_SCROLLED);
+    assert.strictEqual(
+      view.liveLog,
+      "  Setting up the project structure now.\n" +
+        "● Bash(npm create next-app random)\n" +
+        "  ⎿  Creating a new Next.js app in /workspace/random\n" +
+        "○ Write(random/app/todo.tsx)\n" +
+        "  Wiring up the random todo list component.\n" +
+        "⣽ Generating..."
+    );
+  });
+
+  it("stops at the selector's own framing, leaving liveLog empty when nothing preceded it", () => {
+    const view = interpretScreen(PERMISSION);
+    assert.strictEqual(view.state, "prompt");
+    assert.strictEqual(view.liveLog, "");
+  });
+
+  it("is empty once nothing has been sent yet", () => {
+    assert.strictEqual(interpretScreen(MODEL_SELECT).liveLog, "");
+  });
+
+  it("still surfaces a spinner line even if it also reads as the status bar", () => {
+    // If a frame ever merges the braille spinner onto the same line as the
+    // bottom status bar ("esc to cancel"), the glyph must win — the live view
+    // must never go blank just because the line also looks like chrome.
+    const lines = [
+      "> hi",
+      "",
+      "⣽ esc to cancel                                            Gemini 3.5 Flash (Medium)"
+    ];
+    assert.strictEqual(interpretScreen(lines).liveLog, "⣽ esc to cancel                                            Gemini 3.5 Flash (Medium)");
+  });
+});
+
 describe("agyScreen.replyFor", () => {
   it("returns the reply matched to a specific prompt", () => {
     const view = interpretScreen(TWO_TURNS);

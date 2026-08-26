@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as vscode from "vscode";
 
 import { AgyState, ScreenView, findUrl, hasEchoFor, replyFor } from "../core/agyScreen";
+import { sanitizePromptText } from "../core/inputSanitizer";
 import { decideOnboarding, offersSignIn, trustPromptIndex } from "../core/onboarding";
 import { SessionPersistence, SessionStore } from "../core/sessionStore";
 import { SLASH_COMMANDS, findSlashCommand, parseSlash } from "../core/slashCommands";
@@ -858,7 +859,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Routes input for the active session: native slash commands vs. prompts. */
   private submit(text: string): void {
-    const trimmed = text.trim();
+    // Sanitize first, then trim: this one string is both recorded in the
+    // transcript and typed onto the CLI's PTY, so it has to be the text that
+    // actually gets sent — control bytes and bidi overrides removed (see
+    // core/inputSanitizer). `InteractiveSessionService.send` repeats this, which
+    // is a no-op here because the sanitizer is idempotent.
+    const trimmed = sanitizePromptText(text).trim();
     const id = this.activeSessionId;
     if (!trimmed || !id || this.runtimes.get(id)?.pending !== undefined) {
       return;

@@ -22,11 +22,13 @@
  * its process; the process exiting tells the view to drop the session.
  */
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 import { Terminal } from "@xterm/headless";
 
 import { buildSessionArgs } from "../core/argBuilder";
 import { ScreenView, bannerAccountReady, interpretScreen, moveKeys, selectionKeys } from "../core/agyScreen";
+import { sanitizePromptText } from "../core/inputSanitizer";
 import { offersSignIn, trustPromptIndex } from "../core/onboarding";
 import { missingPtyBackendMessage, planLaunch } from "../core/ptyLauncher";
 import { AntigravityConfig } from "../core/types";
@@ -380,8 +382,20 @@ export class InteractiveSessionService {
       }, SHUTDOWN_GRACE_MS);
     };
     this.live.set(id, entry);
-    proc.stdout?.on("data", (buf: Buffer) => feed(buf.toString("utf8")));
-    proc.stderr?.on("data", (buf: Buffer) => feed(buf.toString("utf8")));
+    // Decode through a StringDecoder, never `buf.toString("utf8")` per
+    // chunk: a PTY read splits wherever the kernel buffer ends, which lands
+    // mid-codepoint often enough to matter as soon as the screen is not pure
+    // ASCII. Decoding each chunk on its own turns the straddling character into
+    // U+FFFD — measured with Chinese input (#8), that corrupted both the echoed
+    // prompt and the CLI's own box-drawing rules, and a mangled rule makes
+    // `agyScreen` misread the whole frame (the session never came back to
+    // `idle`). StringDecoder holds the partial bytes until the rest arrives.
+    // The node-pty backend above needs none of this: it hands us strings. One
+    // decoder per stream, since they are independent byte streams.
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
+    proc.stdout?.on("data", (buf: Buffer) => feed(outDecoder.write(buf)));
+    proc.stderr?.on("data", (buf: Buffer) => feed(errDecoder.write(buf)));
     proc.on("exit", (code) => this.handleExit(id, code));
     proc.on("error", (err) =>
       this.handleExit(id, null, `Could not start \`${plan.command}\`: ${err.message}`)
@@ -394,7 +408,11 @@ export class InteractiveSessionService {
     if (!entry) {
       return;
     }
-    const line = text.replace(/\r?\n/g, " ");
+    // Last line of defence before the text becomes keystrokes on a real PTY:
+    // control bytes in a prompt are keys the TUI acts on, not characters it
+    // types (see core/inputSanitizer). The view sanitizes on the way in too;
+    // this is idempotent, so the two never disagree.
+    const line = sanitizePromptText(text);
     if (!entry.ready) {
       // Coalesce a repeat of the line already waiting: anything retrying a
       // send while we hold the queue would otherwise stack up copies, and the
@@ -424,7 +442,7 @@ export class InteractiveSessionService {
     if (!entry) {
       return;
     }
-    entry.write(text.replace(/\r?\n/g, " "));
+    entry.write(sanitizePromptText(text));
     setTimeout(() => this.live.get(id)?.write("\r"), 120);
   }
 

@@ -17,8 +17,8 @@ contains no model logic, credentials, or network calls of its own.
 │                                                          │ uses         │
 ├────────────────────────────────────────────────────────┼──────────────┤
 │  core/  (NO `vscode` import — pure, unit-tested)         ▼              │
-│  agyScreen · argBuilder · binaryResolver · onboarding · slashCommands   │
-│  sessionStore · processRunner · types                                   │
+│  agyScreen · argBuilder · binaryResolver · inputSanitizer · onboarding  │
+│  slashCommands · sessionStore · processRunner · types                   │
 └─────────────────────────────────────────────────────────────────────────┘
         │ spawns via core/ptyLauncher:                 ▲ raw PTY bytes
         │   Unix → `script` + `stty` (2 argv flavours) │ (→ @xterm/headless)
@@ -75,6 +75,18 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
   naming it.
 - **`argBuilder`** — builds exact argv for session/version/subcommands; we always
   spawn with an explicit argv (no shell).
+- **`inputSanitizer`** — cleans user text before it is typed onto the PTY. On a
+  terminal a control byte is a *key press*, not a character, so a prompt
+  carrying one drives the TUI: verified against agy 1.1.11, `U+001A` (Ctrl+Z —
+  what we ourselves send to end a session) suspended the session and the
+  submitting Enter did nothing, and `ESC [ 200 ~` (bracketed paste) put the
+  input box in a state that ate the Enter. Both wedge the session silently, and
+  both arrive through ordinary pasting. It strips C0/C1 + DEL, folds every
+  line-break form and Tab to a space (so one prompt can't become two
+  submissions), drops bidi override/embedding/isolate characters (Trojan Source)
+  and unpaired surrogates, and caps the length — leaving all printable text,
+  CJK included, alone. Idempotent, and applied twice: at the view (so the
+  transcript records what was really sent) and again at the write.
 - **`onboarding`** — install → sign‑in → ready decisions, reading "the CLI is
   asking for a login" off a screen (`screenNeedsLogin`), login‑error
   classification, and version parsing.
@@ -97,8 +109,13 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
   shim on Unix, a prebuilt node-pty ConPTY on Windows — behind a backend-agnostic
   `write`/`terminate` pair), feeds the raw output through `@xterm/headless`,
   debounces, and emits an
-  interpreted `ScreenView` on each settled frame. It also queues input until the
-  prompt is ready, takes per-session launch toggles (sandbox / skip-permissions),
+  interpreted `ScreenView` on each settled frame. PTY bytes go through a
+  `StringDecoder`, never a per-chunk `toString("utf8")`: a read splits wherever
+  the kernel buffer ends, and a CJK character — or a box-drawing rule —
+  straddling that boundary decoded to `U+FFFD`, which made the parser misread
+  the whole frame and left the session stuck out of `idle`. It also queues input
+  until the prompt is ready, takes per-session launch toggles (sandbox /
+  skip-permissions),
   and exposes a raw mirror sink for the on-demand terminal. On dispose it ends a
   session **gracefully**: it sends **Ctrl+Z** (so `agy` ends the session from its
   own perspective), then after a short grace terminates with SIGCONT + SIGKILL —
@@ -122,7 +139,11 @@ Unit‑tested on bare Node (`tsconfig.test.json` compiles only `core/` + tests):
   process; process exit ⇒ drop session), and the terminal button **toggles** a
   `Pseudoterminal` mirroring the live process (open if hidden, close if showing).
   New sessions carry the sandbox / bypass-permissions toggles chosen in the New
-  Session menu. The typed `protocol.ts` models a
+  Session menu. Every text field is **IME-aware** (#8): while a composition is
+  live, Enter/Tab/arrows belong to the input method — Enter *commits* the
+  underlined pre-edit text rather than sending — so the panel only submits on a
+  separate Enter afterwards, matching the CLI's own commit-then-send rhythm.
+  The typed `protocol.ts` models a
   turn as `streamStart → assistantText* → streamEnd`, where `assistantText`
   carries the full current reply (a replace, since the screen is the source of
   truth).
@@ -153,7 +174,10 @@ detection, reply extraction, discarding tool/banner noise), argument building
 onboarding/auth decisions, the slash catalog and parsing, and an integration
 suite that drives the **stub CLI** through `processRunner`. An activation test
 loads the real bundled `dist/` with a mocked `vscode` and asserts the webview +
-every command register. The thin `vscode` layer is otherwise covered by the
+every command register, and an IME test loads the real `media/main.js` against a
+DOM stub and replays both of the event orderings browsers use for a Chinese
+composition (#8), asserting the committing Enter never submits and the next one
+does. The thin `vscode` layer is otherwise covered by the
 strict type‑check.
 
 The interactive engine itself was validated end-to-end against the real `agy`

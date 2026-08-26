@@ -11,6 +11,27 @@ real `agy` TUI end-to-end.
 
 ### Fixed
 
+- **Chinese, Japanese and Korean input now works (#8).** With an IME, `Enter`
+  *commits* the underlined pre-edit text and the arrow keys drive the candidate
+  window — none of that is a submit. The composer listened for `Enter`
+  regardless, so the first commit fired off half-typed pinyin as the prompt and
+  made those languages unusable. Every field (the composer, the "Write-in"
+  answer box, the sign-in code box) now leaves the whole composition to the IME
+  and sends only on a separate `Enter` afterwards — the same commit-then-send
+  rhythm the `agy` CLI itself has. The slash navigator likewise stays out of the
+  way until the composition is committed.
+- **Non-ASCII output is no longer corrupted mid-character.** PTY reads split
+  wherever the kernel buffer ends, and each chunk was decoded as UTF-8 on its
+  own, so a character straddling the boundary became `U+FFFD`. With Chinese
+  text that mangled both the echoed prompt and the CLI's own box-drawing rules —
+  and a broken rule makes the screen parser misread the frame, leaving the
+  session stuck out of `idle`. Chunks are now decoded through a `StringDecoder`
+  that holds the partial bytes until the rest arrives.
+- **The collapse icon is now a collapse icon.** The expand/collapse control on
+  the composer and on each live-output window toggled between two glyphs whose
+  arrows both point *outward* and differ only in which diagonal they sit on, so
+  either state read as "expand". The collapsed state keeps the outward arrows;
+  the expanded state now shows arrows pointing inward, at each other.
 - **Windows sign-in / lifecycle commands no longer fail on PowerShell (#2).**
   Command lines sent to the integrated terminal are now quoted for the actual
   shell — PowerShell gets the call operator (`& 'C:\…\agy.exe'`) so a quoted path
@@ -167,6 +188,26 @@ real `agy` TUI end-to-end.
 - Option cards parse an inline `(current)` marker and secondary description
   (seen on `/model`, `/permissions`, `/hooks`) into a bold name, a "current"
   badge, and muted description text.
+
+### Security
+
+- **Control bytes in submitted text can no longer drive the CLI's TUI.**
+  Everything the panel submits is typed onto a real pseudo-terminal, where a
+  control byte is a key press rather than a character — and text carrying them
+  arrives through ordinary use (pasting from a terminal, a log, or a model's own
+  output). Verified against agy 1.1.11: a prompt containing `U+001A` (Ctrl+Z,
+  which is how this extension *ends* a session) suspended the session and the
+  submitting `Enter` then did nothing, and one containing the bracketed-paste
+  introducer `ESC [ 200 ~` put the input box into a state that ate the `Enter` —
+  either way the prompt was silently never sent and the composer stayed locked
+  for good. Submitted text is now stripped of C0/C1 controls and DEL, has every
+  line-break form (`CR`/`LF`, `VT`/`FF`, `NEL`/`LS`/`PS`) and `Tab` folded to a
+  space so one prompt cannot become two submissions, drops bidirectional
+  override/embedding/isolate characters ("Trojan Source", which would let a line
+  display as something other than what is sent) and unpaired surrogates, and is
+  length-capped. Printable text is untouched — CJK, combining marks, emoji ZWJ
+  sequences and the plain RTL marks all pass through. It is applied at the view
+  (so the transcript records exactly what was sent) and again at the write.
 
 ## [0.5.0] — 2026-06-03
 

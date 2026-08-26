@@ -344,7 +344,7 @@
   // window reads as the same affordance as the one on the chat input.
   const EXPAND_ICONS =
     '<svg class="i-expand" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3H3v6h2V6.4L9.6 11 11 9.6 6.4 5H9V3zm6 18h6v-6h-2v2.6L14.4 13 13 14.4l4.6 4.6H15v2z"/></svg>' +
-    '<svg class="i-collapse" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 14h2v2.6L10.6 12 12 13.4 7.4 18H10v2H4v-6zm16-4h-2V7.4L13.4 12 12 10.6 16.6 6H14V4h6v6z"/></svg>';
+    '<svg class="i-collapse" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 11h6V5H9v2.6L4.4 3 3 4.4l4.6 4.6H5zm14 2h-6v6h2v-2.6l4.6 4.6 1.4-1.4-4.6-4.6H19z"/></svg>';
 
   function labelExpand(btn, big) {
     const label = big ? "Collapse output" : "Expand output";
@@ -435,7 +435,11 @@
     inp.placeholder = "Type your " + (label && !/^write[\s-]?in/i.test(label) ? label.replace(/\s*…?$/, "") : "answer") + "…";
     const sendBtn = el("button", "writein__send"); sendBtn.type = "button"; sendBtn.textContent = "Send";
     const go = () => { const t = inp.value.trim(); if (!t) return; vscode.postMessage({ type: "sendText", text: t }); clearWriteIn(); };
-    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+    const comp = trackComposition(inp);
+    inp.addEventListener("keydown", (e) => {
+      if (isComposingKey(comp, e)) return; // the IME's Enter commits, it doesn't send (#8)
+      if (e.key === "Enter") { e.preventDefault(); go(); }
+    });
     sendBtn.addEventListener("click", go);
     box.append(inp, sendBtn);
     lane().appendChild(box); state.writeInEl = box; scrollToBottom(); inp.focus();
@@ -643,9 +647,39 @@
   }
 
   // ===========================================================================
+  //  IME composition (#8)
+  // ===========================================================================
+  // Chinese, Japanese and Korean input goes through an IME: keystrokes build a
+  // *pre-edit* string in the field (the underlined text), arrows and Tab drive
+  // its candidate window, and Enter COMMITS the chosen characters — it is not a
+  // submit. Acting on those keys mid-composition sent half-typed pinyin as the
+  // prompt and made Chinese unusable (#8). The CLI itself gets this right — the
+  // first Enter commits, a second one sends — so the panel now behaves the same.
+  //
+  // `isComposing` (keyCode 229 on older engines) is true on the committing key
+  // press in every current browser. The tracked flag is the backstop for engines
+  // that fire `compositionend` BEFORE that keydown: it is cleared in a
+  // macrotask, so a keydown dispatched in the same task as the commit still sees
+  // a live composition, while the user's next — genuinely separate — Enter does
+  // not. No timing heuristic, so a fast second Enter is never swallowed.
+  /** @param {HTMLElement} field */
+  function trackComposition(field) {
+    const st = { active: false };
+    field.addEventListener("compositionstart", () => { st.active = true; });
+    field.addEventListener("compositionend", () => { setTimeout(() => { st.active = false; }, 0); });
+    return st;
+  }
+  /**
+   * True while `e` belongs to the IME rather than to us.
+   * @param {{active: boolean}} st @param {KeyboardEvent} e
+   */
+  function isComposingKey(st, e) { return st.active || e.isComposing === true || e.keyCode === 229; }
+
+  // ===========================================================================
   //  Composer + send/stop (#2)
   // ===========================================================================
   const expandBtn = $("expand");
+  const inputComposition = trackComposition(input);
   // Height is CSS-driven now: one line when collapsed (#1), full height when
   // expanded (#2) — no JS autosize. While the agent is busy OR a selector is up,
   // lock the input + expander but keep the stop button live (#6).
@@ -863,7 +897,11 @@
   $("gate-open").addEventListener("click", () => vscode.postMessage({ type: "loginOpenUrl" }));
   $("gate-code-submit").addEventListener("click", submitLoginCode);
   gateCode.addEventListener("input", () => gateCodeSubmit.classList.toggle("is-active", gateCode.value.trim() !== ""));
-  gateCode.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitLoginCode(); } });
+  const gateCodeComposition = trackComposition(gateCode);
+  gateCode.addEventListener("keydown", (e) => {
+    if (isComposingKey(gateCodeComposition, e)) return; // (#8)
+    if (e.key === "Enter") { e.preventDefault(); submitLoginCode(); }
+  });
 
   $("notfound-refresh").addEventListener("click", (e) => recheck(e.currentTarget));
   // "Already signed in?" checks BOTH possibilities in one click: re-probe auth
@@ -911,9 +949,14 @@
   function moveSlash(d) { if (!state.matches.length) return; state.slashIndex = (state.slashIndex + d + state.matches.length) % state.matches.length; updateSlashSelection(); }
   function chooseSlash(c) { input.value = c.name + (c.takesArgs ? " " : ""); hideSlash(); input.focus(); }
 
-  input.addEventListener("input", () => { maybeShowSlash(); });
+  // Pre-edit text is not typed text: don't open/refilter the navigator (and so
+  // don't put it in the way of the candidate window) until the IME commits.
+  input.addEventListener("input", () => { if (!inputComposition.active) maybeShowSlash(); });
+  input.addEventListener("compositionend", () => maybeShowSlash());
   input.addEventListener("blur", () => setTimeout(hideSlash, 120));
   input.addEventListener("keydown", (e) => {
+    // Mid-composition, Enter/Tab/arrows drive the IME, not the composer (#8).
+    if (isComposingKey(inputComposition, e)) return;
     const open = !slashEl.hidden && state.matches.length > 0;
     if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); moveSlash(e.key === "ArrowDown" ? 1 : -1); }
     else if (open && (e.key === "Enter" || e.key === "Tab")) { e.preventDefault(); chooseSlash(state.matches[state.slashIndex]); }

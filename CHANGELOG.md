@@ -76,6 +76,67 @@ real `agy` TUI end-to-end.
   last output line (e.g. a `script` usage error or a CLI crash) is surfaced, and
   spawn failures carry the OS error, instead of everything being blamed on
   "check that `agy` is installed and you're signed in".
+- **The first message of a session now just works.** agy paints its input box,
+  and reports itself ready, several seconds before it will honour a submitted
+  prompt — anything sent inside that window is silently discarded ("please try
+  again shortly"). Measured with a bare CLI and no extension code: a prompt sent
+  2s after launch is swallowed, the identical prompt at 25s answers normally.
+  Typing by hand simply outlasts the window, which is why it only ever bit
+  automation. The extension now waits for the CLI's own initialised signal — the
+  banner's account line gaining its plan/quota, `you@example.com` becoming
+  `you@example.com (…)` — and holds your prompt until then, so it is submitted
+  exactly once and the turn runs first time. Only the *presence* of that suffix
+  is checked, never its wording, which differs per account. While the prompt is
+  held the live window says "Connecting to the server…"; that is the only thing
+  it ever says when it has nothing to show.
+- A prompt the CLI still discards (an account whose banner never completes, so
+  the wait falls back to a timeout) is re-sent until it takes, rather than
+  reporting an error you would only have to retry by hand. The re-send checks the
+  input box first and presses Enter alone when the text is already sitting there,
+  so a prompt can never be typed on top of itself into a corrupted one.
+- **An already-signed-in user is no longer sent round the sign-in loop.** Every
+  launch of an authenticated CLI prints "You are currently not signed in" for its
+  first few seconds while it loads credentials, and the auth probe took that at
+  face value: it reported the user as signed out, signing in succeeded, the
+  re-check saw the same banner again, and the gate never resolved. Only an
+  auth-method selector now counts as a verdict on its own; the banner has to
+  persist before it is believed. The same banner no longer tears down live
+  sessions during their startup either — mid-session it still means the
+  credential was revoked, but only once that session has reached its prompt.
+- **The live output window is now actually live, on every turn.** Repaint bytes
+  were coalesced with a trailing debounce that reset on every chunk — and a
+  generating CLI animates its spinner without pause, so the stream never went
+  quiet long enough for the timer to fire and *nothing was parsed at all* until
+  the turn ended. Measured: five frames in forty-five seconds, with an entire
+  multi-second turn arriving as one already-finished screen. That is why the
+  window showed a final snapshot at best, and nothing whatsoever on turns whose
+  single frame came back complete. Coalescing now has a hard ceiling, so frames
+  are parsed at a steady cadence while output flows: the same turns now stream
+  13-15 updates each, spinner animating and the reply growing as it arrives.
+- **A turn the CLI never finishes no longer wedges the chat.** If agy drops back
+  to its input line without answering, that turn used to stay "in flight"
+  forever and the composer stayed locked. It's now closed once the screen has sat
+  *completely unchanged* — still idle, still no reply — for a settle window.
+  Screen-stillness is the signal precisely because a CLI that's genuinely working
+  repaints (its spinner animates, output streams) and so keeps resetting the
+  timer; only one that has finished and gone quiet can trigger it, so a slow turn
+  is never mistaken for a dead one.
+- **Signing in no longer stalls on the workspace-trust question.** agy asks "Do
+  you trust the contents of this project?" on a first run in a folder — whether
+  you just signed in or were already signed in. Nothing answered it, so sign-in
+  parked there until the stuck-screen watchdog gave up and dropped you into a raw
+  terminal, and the auth probe separately burned its full 20-second timeout on
+  the same screen. The sign-in flow now answers it for the workspace you already
+  have open, and the probe treats being asked at all as proof you're past
+  authentication (recognising it without answering, so a throwaway probe never
+  grants trust on your behalf). Both paths reach the session list immediately.
+- **The live output window now keeps updating for every turn, not just the
+  first one in a session.** The window's content used to be gated on the CLI
+  visibly reading as "generating"; on a turn where that read as idle instead
+  (a frame our heuristic can misjudge) nothing streamed in at all. It now
+  streams whatever's rendered since the echo regardless of that read.
+- A live output window no longer shrinks as the conversation grows: it keeps the
+  height it rendered at instead of being squeezed by the transcript's layout.
 
 ### Changed
 
@@ -87,6 +148,22 @@ real `agy` TUI end-to-end.
   once it's answered, so the sequence stays visible for as long as the turn
   runs; each window is then left in the transcript once it's done, as a
   record of what actually happened, rather than being cleared away.
+- **Your inputs now stick to the top of the chat as you scroll.** Each turn is
+  its own section headed by its input bubble, which pins to the top of the
+  transcript — full-bleed, flush with the top edge, no gap — for exactly as
+  long as that turn is on screen and hands over to the next one, so you always
+  know which question the output below belongs to. Replaces the separate
+  pinned-input bar that mirrored only the latest one.
+- Live output windows scroll on their own, and cap at a fixed height with an
+  expand control on their right (the composer's own expand/collapse icons) that
+  grows one to fill the chat area and back. Scrolling inside one now chains to
+  the transcript once it bottoms/tops out (or immediately, if it has nothing of
+  its own to scroll) — the standard nested-scroller handoff, rather than the
+  wheel stopping dead at the window's edge.
+- **The transcript auto-follows new bubbles and live output while you're at the
+  absolute bottom, and only there.** Scroll away by even a little — through
+  history or through a live window — and it stops until you scroll back down to
+  the very bottom, rather than fighting a scroll that isn't all the way there.
 - Option cards parse an inline `(current)` marker and secondary description
   (seen on `/model`, `/permissions`, `/hooks`) into a bold name, a "current"
   badge, and muted description text.

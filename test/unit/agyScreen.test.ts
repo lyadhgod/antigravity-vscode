@@ -1,6 +1,6 @@
 import * as assert from "node:assert";
 
-import { findUrl, interpretScreen, moveKeys, replyFor, selectionKeys } from "../../src/core/agyScreen";
+import { bannerAccountReady, findUrl, hasEchoFor, interpretScreen, moveKeys, replyFor, selectionKeys } from "../../src/core/agyScreen";
 
 /*
  * These frames are the *rendered screens* produced by feeding real `agy` v1.0.4
@@ -627,6 +627,55 @@ describe("agyScreen.replyFor", () => {
   it("leaves an unwrapped prompt's reply untouched", () => {
     const view = interpretScreen(TWO_TURNS);
     assert.strictEqual(replyFor(view, "reply with exactly: ONEONE"), "ONEONE");
+  });
+
+  // The provider needs replyFor's two empty results kept apart: "the CLI hasn't
+  // taken our prompt yet" (keep waiting) vs "it took it and answered nothing"
+  // (it errored — finish the turn so the composer unlocks).
+  describe("hasEchoFor", () => {
+    it("is true for a prompt the screen echoes, false for one it doesn't", () => {
+      const view = interpretScreen(TWO_TURNS);
+      assert.ok(hasEchoFor(view, "reply with exactly: ONEONE"));
+      assert.ok(hasEchoFor(view, "reply with exactly: TWOTWO"));
+      assert.ok(!hasEchoFor(view, "a prompt that was never sent"));
+    });
+
+    it("matches a long prompt the TUI wrapped, like replyFor's prefix fallback", () => {
+      assert.ok(hasEchoFor(interpretScreen(WRAPPED_PROMPT), WRAPPED_INPUT));
+    });
+
+    it("reads the banner's account line as the CLI's initialised signal", () => {
+      // Captured from two different real accounts — the suffix wording differs,
+      // so only its presence may be tested, never its text.
+      const banner = (acct: string) => [
+        "      ▄▀▀▄        Antigravity CLI 1.1.11",
+        `     ▀▀▀▀▀▀       ${acct}`,
+        "    ▀▀▀▀▀▀▀▀      Gemini 3.6 Flash (High)",
+        "   ▄▀▀    ▀▀▄     ~",
+        "  ▄▀▀      ▀▀▄",
+        ">",
+        "? for shortcuts"
+      ];
+      assert.strictEqual(bannerAccountReady(banner("lyadhgod.com@gmail.com")), false);
+      assert.strictEqual(bannerAccountReady(banner("lyadhgod.com@gmail.com (Antigravity Starter Quota)")), true);
+      assert.strictEqual(bannerAccountReady(banner("rounak.tikadar@gmail.com (Google AI Pro)")), true);
+    });
+
+    it("is undefined once the banner has scrolled away, so callers latch instead", () => {
+      // The model line also carries parentheses; without an email it must not
+      // be mistaken for the account line.
+      assert.strictEqual(bannerAccountReady(["> hi", "  Gemini 3.6 Flash (High)", "? for shortcuts"]), undefined);
+    });
+
+    it("separates 'echoed but no reply' from 'not echoed at all'", () => {
+      // Idle, our echo on screen, nothing under it — the shape an errored turn
+      // leaves behind, and the one case that must not read as "still starting".
+      const view = interpretScreen(["> do the thing", "", ">", "? for shortcuts"]);
+      assert.strictEqual(view.state, "idle");
+      assert.strictEqual(replyFor(view, "do the thing"), "");
+      assert.ok(hasEchoFor(view, "do the thing"));
+      assert.ok(!hasEchoFor(view, "some other thing"));
+    });
   });
 });
 

@@ -26,8 +26,8 @@ import { spawn } from "node:child_process";
 import { Terminal } from "@xterm/headless";
 
 import { buildSessionArgs } from "../core/argBuilder";
-import { ScreenView, interpretScreen, moveKeys, selectionKeys } from "../core/agyScreen";
-import { screenNeedsLogin } from "../core/onboarding";
+import { ScreenView, bannerAccountReady, interpretScreen, moveKeys, selectionKeys } from "../core/agyScreen";
+import { offersSignIn, trustPromptIndex } from "../core/onboarding";
 import { missingPtyBackendMessage, planLaunch } from "../core/ptyLauncher";
 import { AntigravityConfig } from "../core/types";
 
@@ -102,6 +102,13 @@ const PTY_COLS = 120;
 const PTY_ROWS = 40;
 /** Coalesce bursts of repaint output before parsing a settled frame. */
 const RENDER_DEBOUNCE_MS = 120;
+/**
+ * Hard ceiling on that coalescing. A generating CLI repaints its spinner
+ * without pause, so the debounce alone never settles and nothing gets parsed
+ * for the whole turn; this forces a parse at a steady cadence while output
+ * flows, which is what makes the live output window actually live.
+ */
+const RENDER_MAX_WAIT_MS = 250;
 /** Cap the mirror replay buffer so a long session can't grow unbounded. */
 const RAW_CAP = 1_500_000;
 /** Grace period after Ctrl+Z (end the session, #6) before we terminate `agy`. */
@@ -110,6 +117,19 @@ const SHUTDOWN_GRACE_MS = 250;
 const PROBE_SESSION_ID = "__authprobe__";
 /** Give the probe this long to reach a decisive screen before assuming "no login needed". */
 const PROBE_TIMEOUT_MS = 20000;
+/**
+ * How long to wait for the banner's account line to complete before sending a
+ * held prompt anyway. Measured at ~11s from spawn on a warm machine; this has
+ * clear air above that, and only ever applies if the CLI never gives the signal.
+ */
+const INIT_MAX_WAIT_MS = 25000;
+/**
+ * How long the "not signed in" banner must stay on screen before it is believed.
+ * An authenticated CLI shows it for ~4s of every launch while it loads
+ * credentials, so this needs clear air above that; a genuinely signed-out CLI
+ * that offers auth methods is recognised at once and never waits.
+ */
+const SIGNIN_CONFIRM_MS = 8000;
 
 /** Per-session launch toggles chosen in the New Session menu (#5). */
 export interface SessionLaunchOptions {
@@ -142,10 +162,26 @@ interface Live {
   raw: string;
   mirror?: (data: string) => void;
   timer?: ReturnType<typeof setTimeout>;
+  /** When the current coalescing burst must be parsed regardless of new output. */
+  renderDeadline?: number;
   lastSerialized: string;
-  /** Becomes true once the input prompt is first ready; gates queued input. */
+  /** Becomes true once the CLI can actually accept input; gates queued input. */
   ready: boolean;
-  /** Prompts requested before the agent was ready, flushed on first idle. */
+  /**
+   * Latched once the banner's account line gains its plan/quota suffix — the
+   * CLI's own signal that it has finished initialising (see
+   * {@link bannerAccountReady}). Latched because that banner scrolls away.
+   */
+  accountReady: boolean;
+  /** Bounded fallback so an account whose banner never completes still runs. */
+  initTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * True once the CLI's prompt UI was ever painted. Distinct from `ready`, which
+   * now additionally waits for initialisation: this one answers "did it get far
+   * enough to blame something other than startup?" for the exit diagnostic.
+   */
+  sawPrompt: boolean;
+  /** Prompts requested before the agent was ready, flushed once it is. */
   queue: string[];
   /** Backend-agnostic input write (`script` stdin or the node-pty ConPTY). */
   write: (data: string) => void;
@@ -165,10 +201,36 @@ export class InteractiveSessionService {
     return this.live.has(id);
   }
 
+  /** Whether the CLI has finished initialising and will honour a submitted prompt. */
+  isReady(id: string): boolean {
+    return this.live.get(id)?.ready ?? false;
+  }
+
+  /** Marks the session able to accept input and flushes anything held back. */
+  private markReady(id: string): void {
+    const entry = this.live.get(id);
+    if (!entry || entry.ready) {
+      return;
+    }
+    entry.ready = true;
+    clearTimeout(entry.initTimer);
+    entry.initTimer = undefined;
+    for (const line of entry.queue.splice(0)) {
+      entry.write(line + "\r");
+    }
+  }
+
   /**
    * Asks the CLI itself whether the user must sign in: launch a throwaway `agy`
-   * and watch what it paints. A sign-in screen (or an auth-method selector) means
-   * login is required; reaching the input prompt means it is not.
+   * and watch what it paints. An auth-method selector means login is required;
+   * reaching the input prompt means it is not.
+   *
+   * The "You are currently not signed in" banner is deliberately **not** taken
+   * at face value. A real, authenticated CLI shows it for the first few seconds
+   * of every launch while it loads credentials, so acting on it reported a
+   * signed-in user as signed out — and since signing in then lands back here,
+   * the gate looped forever. It only counts once it has survived
+   * {@link SIGNIN_CONFIRM_MS}; any other screen in the meantime cancels it.
    *
    * Anything else — process exits early, no PTY backend, the probe times out —
    * resolves `true`. We only demand a login when the CLI actually asked for one;
@@ -177,12 +239,14 @@ export class InteractiveSessionService {
   probeAuth(): Promise<boolean> {
     return (this.probe ??= new Promise<boolean>((resolve) => {
       let settled = false;
+      let signinTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (authenticated: boolean): void => {
         if (settled) {
           return;
         }
         settled = true;
         clearTimeout(timer);
+        clearTimeout(signinTimer);
         this.probe = undefined;
         this.dispose(PROBE_SESSION_ID);
         resolve(authenticated);
@@ -190,9 +254,20 @@ export class InteractiveSessionService {
       const timer = setTimeout(() => finish(true), PROBE_TIMEOUT_MS);
       this.start(PROBE_SESSION_ID, {
         onScreen: (view) => {
-          if (screenNeedsLogin(view)) {
-            finish(false);
-          } else if (view.ready) {
+          if (offersSignIn(view)) {
+            finish(false); // conclusive: it is asking which method to use
+          } else if (view.state === "signin") {
+            // Only the transient startup banner so far — let it prove itself.
+            if (signinTimer === undefined) {
+              signinTimer = setTimeout(() => finish(false), SIGNIN_CONFIRM_MS);
+            }
+          } else if (view.ready || trustPromptIndex(view) >= 0) {
+            // A workspace-trust prompt settles this as surely as the input box:
+            // the CLI only asks about the folder once it's past authentication.
+            // Without it the probe matched nothing and burned its whole timeout
+            // on a first run in an untrusted folder. Deliberately *recognised,
+            // not answered* — a throwaway probe must not grant trust on the
+            // user's behalf; the sign-in flow does that where it's visible.
             finish(true);
           }
         },
@@ -232,9 +307,13 @@ export class InteractiveSessionService {
 
     const term = new Terminal({ cols: PTY_COLS, rows: PTY_ROWS, scrollback: 5000, allowProposedApi: true });
     const entry: Live = {
-      term, observer, raw: "", lastSerialized: "", ready: false, queue: [],
+      term, observer, raw: "", lastSerialized: "", ready: false, accountReady: false, sawPrompt: false, queue: [],
       write: () => {}, terminate: () => {} // replaced once the backend is spawned
     };
+    // Never wait on the banner forever: if that account line somehow never gains
+    // its suffix, go ahead anyway rather than sitting on the user's prompt. The
+    // chat's re-send guard is still there to catch a submission dropped after.
+    entry.initTimer = setTimeout(() => this.markReady(id), INIT_MAX_WAIT_MS);
 
     // Shared by both backends: fold raw output into the mirror + emulator +
     // debounced parse. Bytes arrive as a Buffer (`script`) or string (node-pty).
@@ -317,7 +396,14 @@ export class InteractiveSessionService {
     }
     const line = text.replace(/\r?\n/g, " ");
     if (!entry.ready) {
-      entry.queue.push(line);
+      // Coalesce a repeat of the line already waiting: anything retrying a
+      // send while we hold the queue would otherwise stack up copies, and the
+      // flush on ready would submit every one of them. Only an identical
+      // *consecutive* line is dropped, so genuinely distinct queued prompts
+      // still all go through.
+      if (entry.queue[entry.queue.length - 1] !== line) {
+        entry.queue.push(line);
+      }
       return;
     }
     entry.write(line + "\r");
@@ -431,6 +517,7 @@ export class InteractiveSessionService {
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
+    clearTimeout(entry.initTimer);
     try {
       entry.write("\x1a"); // Ctrl+Z — end the session from the CLI's view
     } catch {
@@ -454,28 +541,58 @@ export class InteractiveSessionService {
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
+    clearTimeout(entry.initTimer);
     // Died before the prompt ever appeared: whatever it printed last is the real
     // reason (a `script` usage error, a CLI crash), so pass it up instead of
     // letting the view blame the sign-in state (#3).
-    const tail = entry.ready ? undefined : lastOutputLine(entry.raw);
+    const tail = entry.sawPrompt ? undefined : lastOutputLine(entry.raw);
     entry.observer.onExit(code, error ?? (tail && `The Antigravity session ended before it was ready: ${tail}`));
   }
 
+  /**
+   * Debounce a burst of repaint bytes into one parse — but never past
+   * {@link RENDER_MAX_WAIT_MS}.
+   *
+   * The cap is the whole point. A plain trailing debounce resets on every
+   * chunk, and a generating `agy` animates its spinner continuously, so the
+   * output stream never goes quiet for a full debounce interval: the timer was
+   * pushed back forever and *no frame was parsed at all* until the turn ended.
+   * Measured before this cap: five frames in forty-five seconds, with a whole
+   * multi-second turn arriving as one already-finished screen — which is why
+   * the live output window only ever showed a final snapshot, and showed
+   * nothing at all on turns whose single frame came back complete.
+   */
   private scheduleRender(id: string): void {
     const entry = this.live.get(id);
     if (!entry) {
       return;
     }
+    // The cap clock starts on the first chunk after a parse, and is NOT reset
+    // by later chunks — that is what stops a continuous stream from starving it.
+    if (entry.renderDeadline === undefined) {
+      entry.renderDeadline = Date.now() + RENDER_MAX_WAIT_MS;
+    }
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
-    entry.timer = setTimeout(() => this.render(id), RENDER_DEBOUNCE_MS);
+    const wait = Math.max(0, Math.min(RENDER_DEBOUNCE_MS, entry.renderDeadline - Date.now()));
+    entry.timer = setTimeout(() => this.render(id), wait);
   }
 
   private render(id: string): void {
     const entry = this.live.get(id);
     if (!entry) {
       return;
+    }
+    entry.timer = undefined;
+    const hitCap = entry.renderDeadline !== undefined && Date.now() >= entry.renderDeadline;
+    entry.renderDeadline = undefined;
+    // A capped parse can read the emulator a beat before it has applied the
+    // newest bytes, so leave a trailing settled parse behind it to pick up the
+    // remainder. Any further output reschedules this, and a parse that finds
+    // the screen unchanged simply returns below.
+    if (hitCap) {
+      entry.timer = setTimeout(() => this.render(id), RENDER_DEBOUNCE_MS);
     }
     const buffer = entry.term.buffer.active;
     const lines: string[] = [];
@@ -489,15 +606,21 @@ export class InteractiveSessionService {
     entry.lastSerialized = serialized;
 
     const view = interpretScreen(lines);
-    // Once the prompt is first ready, release any prompts queued during boot.
-    // `view.ready` (the pinned input box is painted) is a status-wording-agnostic
-    // readiness signal alongside the run states (#5).
-    if (!entry.ready && (view.ready || view.state === "idle" || view.state === "generating" || view.state === "prompt")) {
-      entry.ready = true;
-      const queued = entry.queue.splice(0);
-      for (const line of queued) {
-        entry.write(line + "\r");
-      }
+    // The banner's account line completing is the CLI's own "initialised" tell;
+    // latch it, because the banner scrolls away as the conversation grows.
+    if (!entry.accountReady && bannerAccountReady(lines) === true) {
+      entry.accountReady = true;
+    }
+    // Release prompts queued during boot only once the CLI can *accept* one.
+    // The painted input box (`view.ready`) is not enough on its own: the CLI
+    // draws it, and reports itself idle, several seconds before it will honour a
+    // submission, and silently discards anything sent in between.
+    const atPrompt = view.ready || view.state === "idle" || view.state === "generating" || view.state === "prompt";
+    if (atPrompt) {
+      entry.sawPrompt = true;
+    }
+    if (!entry.ready && entry.accountReady && atPrompt) {
+      this.markReady(id);
     }
     entry.observer.onScreen(view, lines);
   }

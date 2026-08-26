@@ -42,7 +42,7 @@
         <h2>CLI not found</h2>
         <p>The <strong>Antigravity CLI</strong> (<code>agy</code>) wasn't found on your PATH.</p>
         <p class="gate__install-hint">Install it from <a href="https://antigravity.google/product/antigravity-cli" class="gate__link">Antigravity CLI</a>, then set <code>antigravity.cliPath</code> if needed.</p>
-        <button id="notfound-refresh" class="btn btn--text" type="button">I've installed it — refresh</button>
+        <button id="notfound-refresh" class="btn btn--text" type="button">I've installed it, refresh</button>
       </div>
     </section>
 
@@ -99,13 +99,9 @@
 
     <!-- Step 2: per-session chat. -->
     <main id="chatarea" class="chatarea">
-      <!-- The most recent user input scrolled above the fold, pinned just below
-           the app bar (#2). It changes as you scroll up; "Show more" expands it
-           when it's taller than the clamp. -->
-      <div id="pinned" class="pinned" hidden>
-        <div id="pinned-body" class="pinned__body"></div>
-        <button id="pinned-more" class="showmore" type="button" hidden>Show more</button>
-      </div>
+      <!-- Each turn is a <section class="turn"> whose user bubble is a sticky
+           header (#5): the input you're reading under stays pinned to the top
+           of the transcript and hands over to the next one as you scroll. -->
       <div id="transcript" class="transcript" aria-live="polite"></div>
     </main>
 

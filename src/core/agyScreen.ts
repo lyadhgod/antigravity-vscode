@@ -587,12 +587,55 @@ export function replyFor(view: ScreenView, input: string): string {
   const ni = norm(input);
   let reply = "";
   for (const turn of view.turns) {
-    const nu = norm(turn.user);
-    if (nu !== "" && (nu === ni || ni.startsWith(nu))) {
+    if (echoes(turn, ni)) {
       reply = stripEchoedTail(turn.assistant, input, turn.user);
     }
   }
   return reply;
+}
+
+/** Whether `turn`'s echoed user row is `ni` (a normalized prompt), whole or wrapped-prefix. */
+function echoes(turn: Turn, ni: string): boolean {
+  const nu = norm(turn.user);
+  return nu !== "" && (nu === ni || ni.startsWith(nu));
+}
+
+/**
+ * Whether the screen still shows the echo of a prompt we sent — i.e. the CLI
+ * definitely took it and this frame is about *that* turn.
+ *
+ * This separates the two ways {@link replyFor} can come back empty: the prompt
+ * hasn't been echoed yet (wait), versus the CLI accepted it and produced no
+ * answer at all (it errored — see the caller in `chatViewProvider`). Without
+ * the distinction an errored turn stays "pending" forever and the composer
+ * never unlocks.
+ */
+export function hasEchoFor(view: ScreenView, input: string): boolean {
+  const ni = norm(input);
+  return view.turns.some((turn) => echoes(turn, ni));
+}
+
+/**
+ * Whether the banner's account line is *finished* — the email followed by the
+ * plan/quota in parentheses.
+ *
+ * This is the CLI's own "I'm initialised" tell. It paints the input box, and
+ * reports itself ready, while that line still reads just `you@example.com`;
+ * a prompt submitted in that window is silently discarded. Moments later the
+ * line becomes `you@example.com (Antigravity Starter Quota)` and prompts work.
+ * The wording of the suffix varies by account ("Google AI Pro", "Antigravity
+ * Starter Quota", …), so only its *presence* is tested, never its text.
+ *
+ * `undefined` means the banner isn't on screen to read — it scrolls away once a
+ * conversation grows, so callers latch the first `true` rather than re-deriving
+ * this later and concluding the CLI has de-initialised.
+ */
+export function bannerAccountReady(rawLines: string[]): boolean | undefined {
+  const line = rawLines.find((l) => isBanner(l.trim()) && /\S+@\S+/.test(l));
+  if (line === undefined) {
+    return undefined;
+  }
+  return /@\S+\s+\([^)]+\)/.test(line);
 }
 
 /**

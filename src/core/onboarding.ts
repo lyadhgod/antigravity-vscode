@@ -29,10 +29,41 @@ const LOGIN_HINTS = [
  * credential lives in the OS keychain or was created in a terminal (#3, #5).
  */
 export function screenNeedsLogin(view: ScreenView): boolean {
-  return (
-    view.state === "signin" ||
-    !!view.prompt?.options.some((o) => /oauth|sign in|sign-in|log in|login/i.test(o.label))
-  );
+  return view.state === "signin" || offersSignIn(view);
+}
+
+/**
+ * The CLI is *conclusively* asking to authenticate — it is offering auth
+ * methods to pick from.
+ *
+ * Kept apart from {@link screenNeedsLogin} because that predicate's other half,
+ * the "You are currently not signed in" banner, is **not** conclusive: the CLI
+ * prints it at startup while it is still loading credentials, and then signs in
+ * by itself. Observed against a real, fully-authenticated CLI: that banner is
+ * on screen for the first ~4 seconds of every launch before the session becomes
+ * ready. Treating it as an answer makes an authenticated user look signed out,
+ * which sends the gate round the sign-in loop forever. So a caller wanting a
+ * verdict from a single frame must use this; the banner only counts once it has
+ * persisted, or on a session that had already reached its prompt.
+ */
+export function offersSignIn(view: ScreenView): boolean {
+  return !!view.prompt?.options.some((o) => /oauth|sign in|sign-in|log in|login/i.test(o.label));
+}
+
+/**
+ * Index of the "Yes, I trust this folder" row on the CLI's workspace-trust
+ * selector ("Do you trust the contents of this project?"), or -1 when the
+ * screen isn't that selector. Matched on the affirmative option rather than the
+ * title, so a reworded heading doesn't break it; "No, exit" carries no "trust".
+ *
+ * Two callers need this, for different reasons. The sign-in flow answers it, so
+ * a first run in a new folder doesn't stall behind a selector nothing drives.
+ * The auth probe only needs to *recognise* it: being asked about the folder at
+ * all means the CLI is past authentication, which lets the probe settle
+ * immediately instead of sitting out its full timeout.
+ */
+export function trustPromptIndex(view: ScreenView): number {
+  return view.prompt?.options.findIndex((o) => /\btrust\b/i.test(o.label)) ?? -1;
 }
 
 /**

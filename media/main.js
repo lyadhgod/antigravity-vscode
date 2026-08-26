@@ -37,9 +37,6 @@
   }
 
   const transcript = $("transcript");
-  const pinned = $("pinned");
-  const pinnedBody = $("pinned-body");
-  const pinnedMore = /** @type {HTMLButtonElement} */ ($("pinned-more"));
   const listEl = $("list");
   const sessionsEl = $("sessions");
   const input = /** @type {HTMLTextAreaElement} */ ($("input"));
@@ -57,6 +54,9 @@
     // history — they're never removed.
     /** @type {{wrap:HTMLElement, pre:HTMLElement}|null} */
     liveCli: null,
+    // True while the host is holding the prompt back because the CLI hasn't
+    // finished initialising — the only state the empty live window explains.
+    initializing: false,
     catalog: [],
     matches: [],
     /** @type {HTMLElement[]} */
@@ -180,40 +180,66 @@
   // ===========================================================================
   //  Transcript (step 2)
   // ===========================================================================
-  function scrollToBottom() { transcript.scrollTop = transcript.scrollHeight; updatePinned(); }
+  // --- Auto-follow ----------------------------------------------------------
+  // New content pins the transcript to the bottom only while the user is
+  // already parked at the absolute bottom. Scrolling away by even a little —
+  // to re-read an earlier turn, or to page back through a live output window
+  // (#3/#5) — stops it until they scroll back down to the very bottom.
+  let stick = true;
+  let autoScrolling = false; // ignore the scroll events our own smooth scroll emits
+  // <2px, not a generous cushion: a few px of slack for subpixel/rounding, not
+  // a "close enough" zone a real upward scroll would still fall inside.
+  function nearBottom() { return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 2; }
+  function scrollToBottom(force) {
+    if (force) stick = true;
+    if (stick) { autoScrolling = true; transcript.scrollTop = transcript.scrollHeight; }
+    markStuck();
+  }
+
+  // --- Turn sections (#5) ---------------------------------------------------
+  // Every user input opens a <section class="turn"> holding it and everything
+  // that follows until the next input. Its header is `position: sticky`, so it
+  // pins to the top of the transcript for exactly as long as its own turn is on
+  // screen and is then pushed off by the next one — the section boundary does
+  // all the work, no scroll math and no separate overlay bar.
+  let turnEl = null;
+  /** The section new content belongs to (a lead-in before any user message gets one too). */
+  function lane() {
+    if (!turnEl) { turnEl = el("section", "turn"); transcript.appendChild(turnEl); }
+    return turnEl;
+  }
 
   function addMessage(kind, html) {
-    const m = el("div", "msg msg--" + kind); m.innerHTML = html; transcript.appendChild(m);
-    if (kind === "user") clampMessage(m); // long inputs get a "Show more" (#2)
-    scrollToBottom(); return m;
+    const m = el("div", "msg msg--" + kind); m.innerHTML = html;
+    if (kind === "user") {
+      turnEl = el("section", "turn");
+      const head = el("div", "turn__head");
+      head.appendChild(m); turnEl.appendChild(head); transcript.appendChild(turnEl);
+      clampMessage(m); // long inputs get a "Show more" (#2), inside the sticky head
+    } else {
+      lane().appendChild(m);
+    }
+    // A new input always jumps to the bottom, even if you'd scrolled back.
+    scrollToBottom(kind === "user"); return m;
   }
 
   function renderHistory(messages) {
-    transcript.innerHTML = ""; state.current = null; state.liveCli = null;
+    transcript.innerHTML = ""; state.current = null; state.liveCli = null; turnEl = null;
+    state.initializing = false;
     clearPrompt(); clearWriteIn();
     for (const msg of messages) {
       const kind = msg.role === "user" ? "user" : msg.role === "system" ? "system" : "assistant";
       addMessage(kind, kind === "assistant" ? renderAssistant(msg.text) : renderMarkdown(msg.text));
     }
-    updatePinned();
+    scrollToBottom(true);
   }
 
-  // --- Pinned latest input + "Show more" clamp (#2) -------------------------
-  // The clamp height (px) above which an input bubble / the pin is collapsed
-  // behind a "Show more" toggle. Must match the CSS max-heights.
-  const PIN_MAX = 96;
+  // --- "Show more" clamp for long inputs (#2) -------------------------------
+  // The clamp height (px) above which an input bubble is collapsed behind a
+  // "Show more" toggle. Must match the CSS max-height. Sticky heads make this
+  // matter more, not less: an unclamped wall of text would pin over the reply.
   const MSG_MAX = 180;
-  let pinnedSrc = null; // the user-message element currently mirrored in the pin
-  let pinRaf = 0;
-
-  // Show the "Show more" toggle on a clamp body only when it actually overflows.
-  function fitClamp(bodyEl, moreBtn, maxPx, clampClass) {
-    bodyEl.classList.remove("is-open");
-    const overflow = bodyEl.scrollHeight > maxPx + 2;
-    bodyEl.classList.toggle(clampClass, overflow);
-    moreBtn.hidden = !overflow;
-    moreBtn.textContent = "Show more";
-  }
+  let scrollRaf = 0;
 
   // A long user-input bubble: clamp it and add a "Show more" toggle beneath it.
   function clampMessage(m) {
@@ -224,44 +250,46 @@
     btn.addEventListener("click", () => {
       const open = m.classList.toggle("is-open");
       btn.textContent = open ? "Show less" : "Show more";
-      updatePinned();
+      markStuck();
     });
-    m.after(btn);
+    m.after(btn); // inside .turn__head, so it travels with the bubble
   }
 
-  // Pin the most recent user input that has scrolled above the transcript's top
-  // edge; it changes as the user scrolls up (#2). Hidden when none is above.
-  function updatePinned() {
-    if (document.body.dataset.view !== "chat") { pinned.hidden = true; pinnedSrc = null; return; }
+  // Flag the one head that's currently pinned at the top edge, so it can carry a
+  // shadow separating it from the content sliding underneath. A head that its
+  // own section has scrolled fully past is no longer stuck — its bottom has
+  // left the viewport — so at most one matches.
+  function markStuck() {
     const topEdge = transcript.getBoundingClientRect().top;
-    let pick = null;
-    transcript.querySelectorAll(".msg--user").forEach((u) => {
-      if (u.getBoundingClientRect().top < topEdge + 2) pick = u;
+    transcript.querySelectorAll(".turn__head").forEach((h) => {
+      const r = h.getBoundingClientRect();
+      h.classList.toggle("is-stuck", r.top <= topEdge + 1 && r.bottom > topEdge + 1);
     });
-    if (!pick) { pinned.hidden = true; pinnedSrc = null; return; }
-    pinned.hidden = false;
-    if (pick !== pinnedSrc) {
-      pinnedSrc = pick;
-      pinnedBody.innerHTML = pick.innerHTML;
-      fitClamp(pinnedBody, pinnedMore, PIN_MAX, "is-clamp");
-    }
   }
-  pinnedMore.addEventListener("click", () => {
-    const open = pinnedBody.classList.toggle("is-open");
-    pinnedMore.textContent = open ? "Show less" : "Show more";
-  });
+
   transcript.addEventListener("scroll", () => {
-    if (pinRaf) return;
-    pinRaf = requestAnimationFrame(() => { pinRaf = 0; updatePinned(); });
+    if (scrollRaf) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0;
+      // Our own smooth scroll passes through positions far from the bottom;
+      // treating those as "the user scrolled away" would kill auto-follow.
+      if (autoScrolling) { if (nearBottom()) autoScrolling = false; }
+      else stick = nearBottom();
+      markStuck();
+    });
   });
-  window.addEventListener("resize", () => updatePinned());
+  // A real gesture always takes control back, even mid-animation.
+  const releaseAuto = () => { autoScrolling = false; };
+  transcript.addEventListener("wheel", releaseAuto, { passive: true });
+  transcript.addEventListener("touchmove", releaseAuto, { passive: true });
+  window.addEventListener("resize", () => { resizeBigCli(); markStuck(); });
 
   // The final assistant bubble — created once the clean reply actually lands,
   // never while still generating (see the CLI-output windows below for that).
   function beginAssistant() {
     const wrap = el("div", "msg msg--assistant");
     const body = el("div");
-    wrap.appendChild(body); transcript.appendChild(wrap);
+    wrap.appendChild(body); lane().appendChild(wrap);
     state.current = { wrap, body, text: "" };
     scrollToBottom();
   }
@@ -292,16 +320,66 @@
   // window is frozen — a selector took over, or the turn ended — it is left in
   // the transcript for good: these are a record of what the CLI actually did,
   // not a throwaway loader (#raw-cli).
+  // Held-prompt note. Kept on `state` (not just the current window) because the
+  // host decides it before `streamStart` creates the window to show it in.
+  function setInitializing(v) {
+    state.initializing = !!v;
+    if (state.liveCli) state.liveCli.wrap.classList.toggle("clilog--init", state.initializing);
+  }
   function newCliWindow() {
-    const wrap = el("div", "clilog clilog--live");
-    const dot = el("div", "clilog__dot");
+    const wrap = el("div", "clilog clilog--live" + (state.initializing ? " clilog--init" : ""));
     const pre = el("pre", "clilog__body");
-    wrap.append(dot, pre);
-    transcript.appendChild(wrap);
+    const btn = el("button", "icon-btn clilog__expand");
+    btn.type = "button"; btn.innerHTML = EXPAND_ICONS;
+    labelExpand(btn, false);
+    btn.addEventListener("click", () => toggleCliWindow(wrap, btn));
+    wrap.append(pre, btn);
+    lane().appendChild(wrap);
     const win = { wrap, pre };
     state.liveCli = win;
     scrollToBottom();
     return win;
+  }
+  // The composer's own expand/collapse glyphs, reused so the control in a log
+  // window reads as the same affordance as the one on the chat input.
+  const EXPAND_ICONS =
+    '<svg class="i-expand" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3H3v6h2V6.4L9.6 11 11 9.6 6.4 5H9V3zm6 18h6v-6h-2v2.6L14.4 13 13 14.4l4.6 4.6H15v2z"/></svg>' +
+    '<svg class="i-collapse" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 14h2v2.6L10.6 12 12 13.4 7.4 18H10v2H4v-6zm16-4h-2V7.4L13.4 12 12 10.6 16.6 6H14V4h6v6z"/></svg>';
+
+  function labelExpand(btn, big) {
+    const label = big ? "Collapse output" : "Expand output";
+    btn.title = label; btn.setAttribute("aria-label", label); btn.setAttribute("aria-expanded", String(big));
+  }
+  // Expanded, the window fills the chat space: the transcript's visible height
+  // less its own turn's sticky head, which would otherwise cover the top of it.
+  // Measured rather than hard-coded so it tracks the panel being resized.
+  function headHeight(wrap) {
+    const turn = wrap.closest(".turn");
+    const head = turn && turn.querySelector(".turn__head");
+    return head ? head.offsetHeight : 0;
+  }
+  function sizeBigCli(wrap) {
+    const avail = transcript.clientHeight - 32 - headHeight(wrap);
+    wrap.style.setProperty("--clilog-full", Math.max(160, avail) + "px");
+  }
+  function resizeBigCli() {
+    transcript.querySelectorAll(".clilog--big").forEach(sizeBigCli);
+  }
+  function toggleCliWindow(wrap, btn) {
+    const big = wrap.classList.toggle("clilog--big");
+    labelExpand(btn, big);
+    if (!big) return;
+    sizeBigCli(wrap);
+    // Bring it to the top of the view, clear of the sticky head. Following new
+    // output would immediately undo that, so hand control back to the user.
+    stick = false; autoScrolling = false;
+    transcript.scrollTop +=
+      wrap.getBoundingClientRect().top - transcript.getBoundingClientRect().top - headHeight(wrap);
+  }
+  // The expand control only earns its place once the content actually overflows
+  // the collapsed window (it stays put while expanded, as the way back).
+  function fitCliWindow(win) {
+    win.wrap.classList.toggle("clilog--overflow", win.pre.scrollHeight > win.pre.clientHeight + 2);
   }
   // A brand-new turn started. Any earlier turn's window should already be
   // frozen (endAssistant/interrupt do that) — freezing again here is just a
@@ -312,11 +390,17 @@
   }
   function setCliOutput(text) {
     const win = state.liveCli || newCliWindow();
+    const pre = win.pre;
+    // Follow the newest line the way a terminal does — but only while the user
+    // is already at the bottom, so scrolling back through earlier output isn't
+    // yanked away by the next frame (#3).
+    const following = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 8;
     // An empty string is a real, if uncommon, state (nothing has rendered for
     // this turn yet) — clilog__body:empty (CSS) shows a placeholder for it, so
-    // the window is never just a bare pulsating dot.
-    win.pre.textContent = text;
-    win.pre.scrollTop = win.pre.scrollHeight; // pin to the newest (bottom) line
+    // the window is never an unexplained blank box.
+    pre.textContent = text;
+    if (following) pre.scrollTop = pre.scrollHeight;
+    fitCliWindow(win);
     scrollToBottom();
   }
   // The live window's content is final — a selector took over, or the turn
@@ -324,8 +408,12 @@
   // the transcript; the next cliOutput (a resumed turn, or a new one) opens a
   // fresh window rather than reusing or clearing this one.
   function freezeCliWindow() {
-    if (state.liveCli) state.liveCli.wrap.classList.remove("clilog--live");
+    if (state.liveCli) state.liveCli.wrap.classList.remove("clilog--live", "clilog--init");
     state.liveCli = null;
+    // `state.initializing` is deliberately NOT cleared here: the host sets it
+    // just before `streamStart`, and streamStart freezes the previous window on
+    // its way to opening the new one — clearing it here wiped the flag before
+    // the window that needed it existed, so the note never appeared.
   }
 
   // ===========================================================================
@@ -350,7 +438,7 @@
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
     sendBtn.addEventListener("click", go);
     box.append(inp, sendBtn);
-    transcript.appendChild(box); state.writeInEl = box; scrollToBottom(); inp.focus();
+    lane().appendChild(box); state.writeInEl = box; scrollToBottom(); inp.focus();
   }
   function answerCard(card, optsEl, picked) {
     if (card.dataset.done) return;          // ignore double-clicks
@@ -488,7 +576,7 @@
     actions.appendChild(cancel);
     card.appendChild(actions);
     card.addEventListener("keydown", (e) => onPromptKey(e, card));
-    transcript.appendChild(card);
+    lane().appendChild(card);
     state.promptEl = card; state.promptData = p; state.promptSig = promptSig(p);
     state.awaitingPrompt = true; document.body.classList.add("awaiting-prompt"); refreshLock();
     card.focus(); scrollToBottom();
@@ -516,7 +604,7 @@
     state.current = null;
     dropStrayLoaders(); // a finished turn must not keep a trailing spinner
     if (!ok && !timedOut) addMessage("error", "The agent exited with an error.");
-    updatePinned();
+    markStuck();
   }
 
   // ===========================================================================
@@ -749,7 +837,7 @@
     state.rechecking = false;
     clearPrompt(); setBusy(false); setWorking(false);
     transcript.innerHTML = ""; state.current = null;
-    state.liveCli = null;
+    state.liveCli = null; turnEl = null; state.initializing = false;
     setView("gate");
     resetGateCard();
     const alert = $("gate-alert");
@@ -846,10 +934,11 @@
         renderList(msg.sessions);
         if (state.ready && document.body.dataset.view !== "chat") setView("list");
         break;
-      case "openSession": renderHistory(msg.messages); setView("chat"); input.focus(); updatePinned(); break;
+      case "openSession": renderHistory(msg.messages); setView("chat"); input.focus(); break;
       case "userMessage": addMessage("user", renderMarkdown(msg.text)); break;
       case "streamStart": beginCliOutput(); break;
       case "cliOutput": setCliOutput(msg.text); break;
+      case "initializing": setInitializing(msg.value); break;
       case "assistantText": setAssistant(msg.text); break;
       case "streamEnd": endAssistant(msg.ok, msg.timedOut); break;
       case "busy": setBusy(msg.value); break;

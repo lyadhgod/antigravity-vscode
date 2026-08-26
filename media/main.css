@@ -215,34 +215,64 @@ body[data-view="chat"] .app-bar .app-bar__back {
 /* min-height:0 is essential: without it a flex item won't shrink below its
    content height, so once messages overflow the transcript stops scrolling and
    pushes the composer (and its buttons) off the bottom of the panel. */
-/* The chat area wraps the scrolling transcript so the pinned latest-input bar
-   (#2) can overlay its top edge, just below the app bar. */
+/* The chat area wraps the scrolling transcript, which sits directly under the
+   app bar; turn headers pin themselves to its top edge (#5). No top/side
+   padding here on purpose (see .turn below) — a scroll container's own
+   padding creates a permanent gap above a `position: sticky` child, because
+   sticky's offset is computed from the padding edge, not the content it
+   scrolls past. Horizontal padding would equally keep a full-bleed sticky
+   header from ever reaching the panel's edges. */
 .chatarea { position: relative; flex: 1 1 auto; min-height: 0; flex-direction: column; }
-.transcript { display: flex; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 14px 8px; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+/* No `gap` between turns either: the head's own symmetric padding supplies the
+   separation, and it has to be padding rather than gap so it survives being
+   pinned (see .turn__head). */
+.transcript { display: flex; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 0 8px; flex-direction: column; scroll-behavior: smooth; }
+/* The breathing room .transcript's own top padding used to give the first
+   turn, restored as real margin instead — unlike padding on the scroll
+   container, margin on a child scrolls away normally, so it never reproduces
+   the sticky-gap bug above. Small, because the head adds its own 12px. */
+.transcript > .turn:first-child { margin-top: 4px; }
+/* A turn with no input bubble of its own (content that arrived before any user
+   message) has no head to space it, so it brings its own. */
+.turn > :first-child:not(.turn__head) { margin-top: 12px; }
 
-/* Pinned latest input (#2): an overlay at the top of the transcript; content
-   scrolls underneath it. Clamped to a max height with a "Show more" toggle. */
-.pinned {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 5;
-  padding: 8px 14px 9px;
-  background: color-mix(in srgb, var(--ag-surface) 88%, transparent);
-  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--ag-outline-variant);
-  box-shadow: 0 2px 8px color-mix(in srgb, #000 14%, transparent);
+/* One conversation turn: a user input and everything it produced. Grouping them
+   is what makes the sticky header work (#5) — a sticky element is bound by its
+   own parent, so each head pins for exactly as long as its turn is on screen and
+   is then pushed out by the next turn's, with no scroll math and no overlay bar.
+   `flex: 0 0 auto` because a scrollable child (a log window) would otherwise let
+   the flex algorithm squash the whole section once the transcript overflows.
+   Side padding lives here (not on .transcript, see above) so the head below can
+   bleed past it full-width with a negative margin. */
+.turn { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; padding: 0 14px; }
+/* Spacing between everything in a turn is real margin, not flex `gap` — gap is
+   empty flow space, which scrolls away completely once the head above it is
+   pinned, leaving zero visible room right where the next bubble/window emerges
+   from underneath it. The head's own gap to what follows is instead baked into
+   its box as real padding (below), which stays visible for as long as it does;
+   this rule is skipped for the element right after it so that isn't doubled. */
+.turn > * + * { margin-top: 12px; }
+.turn__head + * { margin-top: 0; }
+.turn__head {
+  position: sticky; top: 0; z-index: 4; flex: 0 0 auto;
+  /* Bleed past .turn's own side padding to the full transcript width, then
+     reinstate it as real padding — symmetric top and bottom, so the pinned
+     bubble is inset from the top edge by exactly the gap it leaves below
+     itself. Padding rather than margin/gap because only padding is part of the
+     head's own box, and so stays visible for as long as the head is pinned. */
+  margin: 0 -14px; padding: 12px 14px;
+  /* Same 12px gap the transcript used to give these as siblings, so the
+     "Show more" toggle's own -6px offset still lands where it was designed to. */
+  display: flex; flex-direction: column; align-items: flex-end; gap: 12px;
+  /* Opaque, and matching the page, so the turn's own content scrolls *under*
+     the pinned input while the head stays invisible in normal flow. */
+  background: var(--ag-surface);
+  transition: box-shadow var(--ag-dur-short) var(--ag-ease-emphasized);
 }
-.pinned__body {
-  font-size: 12.5px; line-height: 1.4; color: var(--ag-on-surface-variant);
-  overflow-wrap: anywhere;
-}
-.pinned__body.is-clamp:not(.is-open) {
-  max-height: 96px; overflow: hidden;
-  -webkit-mask-image: linear-gradient(180deg, #000 64%, transparent);
-  mask-image: linear-gradient(180deg, #000 64%, transparent);
-}
-.pinned__body.is-open { max-height: 50vh; overflow-y: auto; }
-.pinned .showmore { margin-top: 4px; }
+/* Only while actually pinned: separate it from the content sliding beneath. */
+.turn__head.is-stuck { box-shadow: 0 4px 10px -4px color-mix(in srgb, #000 45%, transparent); }
 
-/* "Show more" toggle for any input bubble (or the pin) taller than the clamp. */
+/* "Show more" toggle for any input bubble taller than the clamp. */
 .showmore {
   appearance: none; border: none; background: none; cursor: pointer; padding: 2px 0;
   font: inherit; font-size: 12px; font-weight: 600; color: var(--ag-primary);
@@ -255,7 +285,7 @@ body[data-view="chat"] .app-bar .app-bar__back {
   -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent);
   mask-image: linear-gradient(180deg, #000 70%, transparent);
 }
-.msg { max-width: 92%; padding: 12px 14px; border-radius: var(--ag-shape-lg); animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both; word-wrap: break-word; overflow-wrap: anywhere; }
+.msg { flex: 0 0 auto; max-width: 92%; padding: 12px 14px; border-radius: var(--ag-shape-lg); animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both; word-wrap: break-word; overflow-wrap: anywhere; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .msg--user { align-self: flex-end; background: var(--ag-primary-container); color: var(--ag-on-primary-container); border-bottom-right-radius: var(--ag-shape-xs); }
 /* The model's final reply is a bubble too, mirroring the user's — just a muted
@@ -384,31 +414,62 @@ body[data-view="chat"] .app-bar .app-bar__back {
    main.js never removes one. */
 .clilog {
   position: relative; align-self: stretch; max-width: 100%;
+  /* Never shrink: the body scrolls, so the flex algorithm is free to collapse
+     this to nothing once the transcript overflows — which read as the window
+     shrinking as the conversation grew. It keeps the height it rendered at. */
+  flex: 0 0 auto;
   border-radius: var(--ag-shape-md);
   background: var(--ag-surface-container-highest);
   border: 1px solid var(--ag-outline-variant);
   animation: rise var(--ag-dur-medium) var(--ag-ease-spring) both;
   overflow: hidden;
 }
+/* Scrolls like a terminal; the right padding reserves room for the expand
+   control so text never runs under it (and nothing shifts when it appears).
+   `overscroll-behavior` is left at its default `auto` (NOT `contain`) so the
+   wheel chains to the transcript once this box's own scroll bottoms out —
+   scroll the log first, then the page, the way a nested scroller normally
+   behaves. When the log has nothing to scroll (content fits, no overflow) that
+   default already sends every wheel tick straight to the transcript, so no
+   separate case is needed for that. */
 .clilog__body {
-  margin: 0; max-height: 160px; overflow-y: auto; padding: 10px 30px 10px 12px;
+  margin: 0; max-height: 160px; overflow-y: auto; padding: 10px 38px 10px 12px;
   font-family: var(--ag-mono); font-size: 12px; line-height: 1.5;
   color: var(--ag-on-surface-variant);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-/* Nothing rendered for this turn — a real, if brief, state right after a turn
-   or selector starts (and, rarely, a frozen window a selector interrupted
-   before anything showed). Either way, show a placeholder rather than leaving
-   the window looking like an empty box with just a dot floating in it. */
+/* Expanded: fill the chat space. --clilog-full is measured from the transcript
+   in main.js (sizeBigCli) so it tracks the panel being resized. */
+.clilog--big .clilog__body { max-height: var(--clilog-full, 70vh); }
+/* A finished window that never showed anything says so. A *live* one says
+   nothing — output normally lands within a second, and narrating that flicker
+   is just noise. The single exception is the held-prompt window: the CLI can
+   sit silent for several seconds while it connects, so that one explains itself
+   rather than looking stalled. */
 .clilog__body:empty::before { content: "(no output)"; opacity: 0.7; font-style: italic; }
-.clilog--live .clilog__body:empty::before { content: "Waiting for agy…"; }
-/* A small pulsing dot marks the window still receiving output; a frozen one
-   (left behind for a selector, or once the turn ends) shows none. */
-.clilog__dot {
-  position: absolute; top: 12px; right: 12px; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--ag-primary); animation: pulse 1.4s var(--ag-ease-emphasized) infinite;
+.clilog--live .clilog__body:empty::before { content: ""; }
+.clilog--init .clilog__body:empty::before { content: "Connecting to the server…"; }
+
+/* Expand/collapse overlay, mirroring the composer's control. Only offered once
+   the content actually overflows the collapsed window — and kept while expanded,
+   since it's the way back. */
+.clilog__expand {
+  position: absolute; top: 4px; right: 4px; width: 28px; height: 28px;
+  border-radius: var(--ag-shape-sm);
+  background: color-mix(in srgb, var(--ag-surface-container-highest) 88%, transparent);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--ag-dur-short) var(--ag-ease-emphasized), background var(--ag-dur-short), transform var(--ag-dur-short) var(--ag-ease-spring);
 }
-.clilog:not(.clilog--live) .clilog__dot { display: none; }
+.clilog--overflow > .clilog__expand, .clilog--big > .clilog__expand { opacity: 1; pointer-events: auto; }
+/* Outranks .icon-btn:hover (defined later): its translucent tint would let the
+   log text show straight through the button. */
+.clilog > .clilog__expand:hover {
+  background: color-mix(in srgb, var(--ag-on-surface) 12%, var(--ag-surface-container-highest));
+  color: var(--ag-on-surface);
+}
+.clilog--big .clilog__expand .i-expand { display: none; }
+.clilog--big .clilog__expand .i-collapse { display: block; }
 
 /* Action row (multi-select Submit + Skip/Cancel). */
 .prompt__actions { display: flex; align-items: center; gap: 10px; }

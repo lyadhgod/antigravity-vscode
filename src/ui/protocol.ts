@@ -64,6 +64,12 @@ export type HostToWebview =
    * `promptEnd` starts a new one underneath it.
    */
   | { type: "cliOutput"; text: string }
+  /**
+   * The prompt is being held because the CLI hasn't finished initialising (its
+   * banner account line has no plan/quota yet). The live window shows an
+   * "Connecting to the server…" note for exactly this window and nothing else.
+   */
+  | { type: "initializing"; value: boolean }
   /** Replaces the in-progress assistant bubble with the full current reply. */
   | { type: "assistantText"; text: string }
   /** The turn is over — the live CLI-output window from it freezes in place (it stays visible) alongside the reply. */

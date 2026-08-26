@@ -23,8 +23,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as vscode from "vscode";
 
-import { AgyState, ScreenView, findUrl, replyFor } from "../core/agyScreen";
-import { decideOnboarding, screenNeedsLogin } from "../core/onboarding";
+import { AgyState, ScreenView, findUrl, hasEchoFor, replyFor } from "../core/agyScreen";
+import { decideOnboarding, offersSignIn, trustPromptIndex } from "../core/onboarding";
 import { SessionPersistence, SessionStore } from "../core/sessionStore";
 import { SLASH_COMMANDS, findSlashCommand, parseSlash } from "../core/slashCommands";
 import { ChatMessage, Session } from "../core/types";
@@ -40,6 +40,50 @@ const LOGIN_SESSION_ID = "__login__";
 
 /** How long an unrecognized screen must sit unchanged before we reveal the CLI. */
 const STUCK_REVEAL_MS = 5000;
+
+/**
+ * How long the screen must sit **completely unchanged**, still idle and still
+ * without a reply, before we give up on the in-flight turn (see
+ * {@link ChatViewProvider.armErrorCheck}). Measured against the real CLI, which
+ * can go several seconds between accepting a prompt and painting its first
+ * frame — so this needs clear air above that, while the only cost of erring
+ * long is a slightly slower unlock on a turn that was never going to finish.
+ */
+const ERRORED_SETTLE_MS = 10000;
+
+/**
+ * How long a *never-echoed* prompt waits on a still screen before we simply
+ * send it again. Much shorter than {@link ERRORED_SETTLE_MS}: an echo is the
+ * CLI's immediate acknowledgement, so its absence on a screen that has stopped
+ * moving already means the keystrokes were dropped — there's nothing to wait for.
+ */
+const NOT_ACCEPTED_RETRY_MS = 2500;
+
+/**
+ * How many times a dropped prompt is re-sent before giving up.
+ *
+ * agy paints its input box, and reports itself ready, before its auth and
+ * eligibility caches have finished warming; anything typed inside that window
+ * is silently discarded ("please try again shortly"). Its own log shows the
+ * race on every single launch — "You are not logged into Antigravity" at
+ * t+7ms, "Auth succeeded" at t+17ms, `Cache(userInfo)` refreshes still failing
+ * after that — and the account tier only joins the header once it settles.
+ *
+ * This is not specific to how we launch it. Measured with a bare `script`-
+ * wrapped CLI and no extension code at all: a prompt sent 2s after launch is
+ * swallowed, the identical prompt sent at 25s answers normally. Typing by hand
+ * simply takes longer than the window, which is why it only bites automation.
+ * So the budget spans that measured window rather than a guess — re-sending is
+ * exactly what a user does, and the turn then completes on its own.
+ */
+const MAX_PROMPT_RESENDS = 6;
+
+/** Stored in place of the reply when the CLI took the turn but produced nothing. */
+const ERRORED_NO_OUTPUT = "_(agy ended the turn without any output — it may have errored.)_";
+
+/** Stored when the CLI kept discarding the prompt, even after we re-sent it. */
+const ERRORED_NOT_ACCEPTED =
+  "_(agy never accepted this prompt. See the output above, then try sending it again.)_";
 
 /** Per-session live state held while its interactive process runs. */
 interface SessionRuntime {
@@ -60,6 +104,17 @@ interface SessionRuntime {
    * before the first freeze of the current turn.
    */
   liveLogFlushed?: string;
+  /**
+   * Pending "did agy just error?" check, armed while the screen sits idle,
+   * carrying our echo, with `liveLog` totally empty — nothing rendered since
+   * the echo at all. Any frame with a reply, any liveLog content, a spinner or
+   * a selector disarms it. See {@link ChatViewProvider.armErrorCheck}.
+   */
+  errorTimer?: ReturnType<typeof setTimeout>;
+  /** How many times {@link ChatViewProvider.armErrorCheck} has re-sent `pending`. */
+  resends?: number;
+  /** Last "held, still initialising" flag pushed to the webview. */
+  lastInitializing?: boolean;
   /** Last `>` input-box text seen, to push only changes to the webview (#9). */
   lastInput?: string;
   /** Last working/background-task flag pushed to the webview. */
@@ -86,6 +141,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Most recent screen that looked like the OAuth URL block, kept fresh while `loginUrlTimer` is pending. */
   private loginUrlLines?: string[];
   private loginUrlTimer?: ReturnType<typeof setTimeout>;
+  /** Signature of the sign-in selector already answered, so it is answered once. */
+  private loginPromptSig?: string;
   private loginMirror?: vscode.Terminal;
   private loginMirrorDismissed = false;
   /** Pending "screen is stuck on something we don't recognize" timers, by session id. */
@@ -203,6 +260,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       rt.pending = undefined;
       rt.promptActive = false;
       rt.liveLogFlushed = undefined;
+      this.disarmErrorCheck(rt); // an explicit Stop must not leave a re-send armed
     }
     this.post({ type: "promptEnd" });
     this.post({ type: "busy", value: false });
@@ -344,6 +402,93 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
+  /**
+   * Closes out the in-flight turn: records the reply, unlocks the composer, and
+   * refreshes the session list. `errored` marks the case where the CLI ended the
+   * turn without producing anything (see {@link armErrorCheck}) — the webview
+   * shows it as a failed turn rather than a silent one.
+   */
+  private finishTurn(sessionId: string, reply: string, erroredText?: string): void {
+    const rt = this.runtimes.get(sessionId);
+    if (!rt) {
+      return;
+    }
+    this.store.addMessage(sessionId, { role: "assistant", text: reply || erroredText || "_(no reply)_" });
+    if (this.activeSessionId === sessionId) {
+      if (reply) {
+        this.post({ type: "assistantText", text: reply });
+      }
+      this.post({ type: "streamEnd", ok: !erroredText, timedOut: false });
+      this.post({ type: "busy", value: false });
+    }
+    rt.pending = undefined;
+    rt.liveLogFlushed = undefined;
+    this.sendSessions();
+  }
+
+  /**
+   * Arms (or **restarts**) the "this turn is going nowhere" check, called on
+   * every frame that reads idle-with-no-reply. Restarting is the whole
+   * mechanism: `onScreen` only fires when the rendered screen actually changed,
+   * so the timer can only reach zero once the screen has been *completely
+   * static* for {@link ERRORED_SETTLE_MS} while still idle and replyless.
+   *
+   * That is the signal that separates a dead turn from a slow one without
+   * guessing: an agent that is genuinely working repaints (its spinner
+   * animates, output streams), which restarts this; one that has printed its
+   * piece and returned to the input line does not. Verified against the real
+   * CLI, which rejects a prompt sent before its account-eligibility check
+   * finishes — it prints a warning, never echoes the prompt, and then goes
+   * perfectly still, which used to leave the composer locked forever.
+   *
+   * What happens when it fires depends on whether the prompt was ever echoed.
+   * No echo means the CLI dropped the keystrokes, and it accepts the same text
+   * moments later — so we just send it again (up to {@link MAX_PROMPT_RESENDS})
+   * rather than reporting a failure the user would only have to retry by hand.
+   */
+  private armErrorCheck(sessionId: string, rt: SessionRuntime, view: ScreenView): void {
+    clearTimeout(rt.errorTimer);
+    // An echo is the CLI's acknowledgement: without one there is nothing left to
+    // wait for, so a dropped prompt is re-sent promptly instead of after the
+    // full give-up window.
+    const echoed = rt.pending !== undefined && hasEchoFor(view, rt.pending);
+    rt.errorTimer = setTimeout(() => {
+      rt.errorTimer = undefined;
+      // Bail if the session went away or the turn resolved while we waited.
+      if (this.runtimes.get(sessionId) !== rt || rt.pending === undefined) {
+        return;
+      }
+      const latest = rt.lastView;
+      if (!latest || latest.state !== "idle" || this.liveReply(latest, rt.pending) !== "") {
+        return;
+      }
+      if (!hasEchoFor(latest, rt.pending) && (rt.resends ?? 0) < MAX_PROMPT_RESENDS) {
+        rt.resends = (rt.resends ?? 0) + 1;
+        // What the CLI discards is the *submission*, not the typing: the text
+        // reaches the `>` box fine, and Enter then clears the box without
+        // running anything. So retype only when the box is actually empty —
+        // typing into a box that still holds the prompt would concatenate it
+        // into a corrupted one. When the text is already sitting there, the
+        // only thing missing is the Enter.
+        if ((latest.input ?? "").trim() === "") {
+          this.interactive.send(sessionId, rt.pending);
+        } else {
+          this.interactive.writeRaw(sessionId, "\r");
+        }
+        // The re-send repaints the screen, which re-arms this through onScreen;
+        // arm here too so a send the CLI *also* swallows silently still retries.
+        this.armErrorCheck(sessionId, rt, latest);
+        return;
+      }
+      this.finishTurn(sessionId, "", hasEchoFor(latest, rt.pending) ? ERRORED_NO_OUTPUT : ERRORED_NOT_ACCEPTED);
+    }, echoed ? ERRORED_SETTLE_MS : NOT_ACCEPTED_RETRY_MS);
+  }
+
+  private disarmErrorCheck(rt: SessionRuntime): void {
+    clearTimeout(rt.errorTimer);
+    rt.errorTimer = undefined;
+  }
+
   /** Force-shows a session's mirror terminal (clearing a previous dismissal). */
   private revealCli(id: string): void {
     if (!this.interactive.isRunning(id)) {
@@ -426,9 +571,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private driveLogin(view: ScreenView, lines: string[]): boolean {
     const prompt = view.prompt;
     if (prompt) {
+      // Answer each selector once. Frames arrive far faster than a selector
+      // changes, so without this the same choice is re-sent every frame — and
+      // the extra Enters land on whatever screen comes next.
+      const sig = prompt.title + "|" + prompt.options.map((o) => o.label).join("|");
+      if (sig === this.loginPromptSig) {
+        return true;
+      }
+      this.loginPromptSig = sig;
       const oauthIndex = prompt.options.findIndex((o) => /oauth/i.test(o.label));
+      const trustIndex = trustPromptIndex(view);
       if (oauthIndex >= 0) {
         this.interactive.selectOption(LOGIN_SESSION_ID, prompt.selectedIndex, oauthIndex, prompt.layout);
+      } else if (trustIndex >= 0) {
+        // "Do you trust the contents of this project?" — the CLI asks this on a
+        // first run in a folder, whether the user just signed in or was already
+        // signed in. Nothing drove it before, so the flow parked here until the
+        // stuck-watchdog gave up and dropped the user into a raw terminal. Say
+        // yes for the workspace they already opened in the editor, and the very
+        // next frame is the ready prompt that completes sign-in.
+        this.interactive.selectOption(LOGIN_SESSION_ID, prompt.selectedIndex, trustIndex, prompt.layout);
       } else if (/color scheme/i.test(prompt.title)) {
         // Accept the default (already-selected) scheme — just confirm it.
         this.interactive.selectOption(LOGIN_SESSION_ID, prompt.selectedIndex, prompt.selectedIndex, prompt.layout);
@@ -494,6 +656,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private resetLoginUrlState(): void {
     this.loginUrl = undefined;
+    this.loginPromptSig = undefined;
     this.loginUrlLines = undefined;
     clearTimeout(this.loginUrlTimer);
     this.loginUrlTimer = undefined;
@@ -737,8 +900,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const rt = this.ensureProcess(sessionId);
     rt.pending = prompt;
     rt.liveLogFlushed = undefined;
+    rt.resends = 0;
+    // Decided up front: the CLI may not repaint again for seconds while it
+    // initialises, so waiting for the next frame would leave the window blank.
+    rt.lastInitializing = !this.interactive.isReady(sessionId);
 
     if (this.activeSessionId === sessionId) {
+      this.post({ type: "initializing", value: rt.lastInitializing });
       this.post({ type: "userMessage", text: prompt });
       this.post({ type: "busy", value: true });
       this.post({ type: "streamStart" });
@@ -788,7 +956,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.watchStuck(sessionId, view.ready || view.state !== "starting");
     // The CLI is asking to sign in mid-session — the credential expired or was
     // revoked. Sessions all share the one account, so none of them can continue.
-    if (screenNeedsLogin(view)) {
+    //
+    // "Mid-session" is the operative word: every launch prints "not signed in"
+    // for a few seconds while it loads credentials, so that banner only counts
+    // once this session has already reached its prompt. Acting on it during
+    // startup tore down every session and bounced the user to the gate. An
+    // auth-method selector is conclusive whenever it appears.
+    if (offersSignIn(view) || (view.state === "signin" && rt.readyOnce)) {
       this.handleLoggedOut();
       return;
     }
@@ -830,6 +1004,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (view.state !== "idle") {
         // Still working: stream the raw log into the live window instead of a
         // bare spinner, so waiting on a reply shows what the CLI is doing.
+        this.disarmErrorCheck(rt);
         if (active) {
           this.post({ type: "cliOutput", text: this.sinceFlush(view.liveLog, rt.liveLogFlushed) });
         }
@@ -839,20 +1014,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // after we answered a selector it had popped, e.g. `/model`).
         const finished = reply !== "" || rt.lastState === "generating" || rt.lastState === "prompt";
         if (finished) {
-          this.store.addMessage(sessionId, { role: "assistant", text: reply || "_(no reply)_" });
+          this.disarmErrorCheck(rt);
+          this.finishTurn(sessionId, reply);
+        } else {
+          // Idle, no reply yet, and we've never seen this turn look like it was
+          // generating. `liveLog` is parsed straight from the raw screen (it
+          // doesn't depend on the state guess above), so keep streaming it
+          // regardless — a frame our coarser heuristic misreads as idle can
+          // still carry real tool-call/prose output, and the live window must
+          // show that instead of sitting on its placeholder until state agrees.
           if (active) {
-            if (reply) {
-              this.post({ type: "assistantText", text: reply });
-            }
-            this.post({ type: "streamEnd", ok: true, timedOut: false });
-            this.post({ type: "busy", value: false });
+            this.post({ type: "cliOutput", text: this.sinceFlush(view.liveLog, rt.liveLogFlushed) });
           }
-          rt.pending = undefined;
-          rt.liveLogFlushed = undefined;
-          this.sendSessions();
+          if (!this.interactive.isReady(sessionId)) {
+            // The prompt is still held back until the CLI finishes initialising
+            // — it has not been delivered yet, so there is nothing to time out
+            // and nothing to re-send. Arming here would fire every couple of
+            // seconds and queue another copy of the prompt behind the first,
+            // and the flush on ready would then submit all of them at once.
+            this.disarmErrorCheck(rt);
+          } else {
+            // Might be a dead turn, might be a dropped prompt, might just be
+            // slow to start. Restart the settle timer on every such frame so it
+            // can only fire once the screen has gone completely *static* in
+            // this state — see armErrorCheck.
+            this.armErrorCheck(sessionId, rt, view);
+          }
         }
       }
     }
+
+    // A prompt held back until the CLI finishes initialising — the one case the
+    // live window explains itself, rather than sitting there looking stalled.
+    const initializing = rt.pending !== undefined && !this.interactive.isReady(sessionId);
+    if (active && initializing !== rt.lastInitializing) {
+      this.post({ type: "initializing", value: initializing });
+    }
+    rt.lastInitializing = initializing;
 
     // 2-way input binding (#9): push the CLI's input-box text to the chat box
     // when it changes (the webview only adopts it when the user isn't typing).
@@ -887,7 +1085,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.activeSessionId = undefined;
     this.sendSessions();
-    this.post({ type: "loggedOut", message: "You got logged out — your sessions were ended. Sign in to continue." });
+    this.post({ type: "loggedOut", message: "You got logged out. Your sessions were ended. Sign in to continue." });
   }
 
   /** Handles a session's process exiting — drops the session (lifecycle #). */

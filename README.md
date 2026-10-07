@@ -1,4 +1,4 @@
-# Antigravity for VS Code
+# Material based Google Antigravity
 
 Bring Google's **Antigravity CLI** (`agy`) into VS Code — an agentic coding
 companion with a **Material 3 Expressive** chat panel, a slash‑command
@@ -12,7 +12,7 @@ official CLI does the work. The extension never bundles the CLI — it drives th
 > **Unofficial / community extension.** Not affiliated with or endorsed by
 > Google. "Antigravity" and "Gemini" are trademarks of Google LLC.
 
-![Antigravity for VS Code in action](media/demo.gif)
+![Material based Google Antigravity in action](media/demo.gif)
 
 ---
 

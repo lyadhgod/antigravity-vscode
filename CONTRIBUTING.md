@@ -1,4 +1,4 @@
-# Contributing to Antigravity for VS Code
+# Contributing to Material based Google Antigravity
 
 Thanks for contributing! This document covers the branch strategy, local setup, and the workflow all contributors follow.
 
